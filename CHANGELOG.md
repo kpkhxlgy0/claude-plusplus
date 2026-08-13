@@ -5,6 +5,16 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.2.1
+
+Release notes: [docs/releases/0.2.1.md](docs/releases/0.2.1.md)
+
+### Fixed
+
+- Fixed Main Tweak hot reload for Junction and symlink installations by clearing modules through their canonical
+  filesystem paths.
+- Prevented stale Tweak code and missing IPC handlers after a linked Tweak source changes while Claude++ is running.
+
 ## 0.2.0
 
 Release notes: [docs/releases/0.2.0.md](docs/releases/0.2.0.md)

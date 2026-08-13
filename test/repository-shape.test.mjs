@@ -15,13 +15,13 @@ test("uses the Claude++ four-package topology", () => {
   }
 });
 
-test("uses version 0.2.0 across the root and every workspace package", () => {
-  assert.equal(rootPackage.version, "0.2.0");
+test("uses version 0.2.1 across the root and every workspace package", () => {
+  assert.equal(rootPackage.version, "0.2.1");
   for (const name of ["installer", "loader", "runtime", "sdk"]) {
     const packageJson = JSON.parse(
       readFileSync(new URL(`../packages/${name}/package.json`, import.meta.url), "utf8"),
     );
-    assert.equal(packageJson.version, "0.2.0", `${name} package version`);
+    assert.equal(packageJson.version, "0.2.1", `${name} package version`);
   }
 });
 
