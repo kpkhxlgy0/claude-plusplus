@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { Tweak, TweakLogger } from "@claude-plusplus/sdk";
@@ -159,8 +159,31 @@ function loadMainTweaks(
 }
 
 function clearMainTweakModuleCache(tweaksRoot: string): void {
+  const rootSet = new Set<string>([tweaksRoot, safeRealpath(tweaksRoot)]);
+  const entrySet = new Set<string>();
+  for (const tweak of discoverTweaks(tweaksRoot, "main")) {
+    rootSet.add(tweak.dir);
+    rootSet.add(safeRealpath(tweak.dir));
+    entrySet.add(tweak.entry);
+    entrySet.add(safeRealpath(tweak.entry));
+  }
+
+  const roots = [...rootSet];
   for (const path of Object.keys(require.cache)) {
-    if (isPathInside(tweaksRoot, path)) delete require.cache[path];
+    const realPath = safeRealpath(path);
+    const isTweakModule =
+      entrySet.has(path) ||
+      entrySet.has(realPath) ||
+      roots.some((root) => isPathInside(root, path) || isPathInside(root, realPath));
+    if (isTweakModule) delete require.cache[path];
+  }
+}
+
+function safeRealpath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
   }
 }
 

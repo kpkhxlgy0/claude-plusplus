@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -250,6 +257,55 @@ test("serves the full Tweak catalog and validated Renderer source through separa
   }
 });
 
+test("reload evaluates changed main Tweak source installed through a junction", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-junction-reload-"));
+  try {
+    const tweaksRoot = join(root, "tweaks");
+    const sourceRoot = join(root, "source", "com.example.junction");
+    const tweakRoot = join(tweaksRoot, "com.example.junction");
+    mkdirSync(tweaksRoot, { recursive: true });
+    mkdirSync(sourceRoot, { recursive: true });
+    writeFileSync(join(sourceRoot, "manifest.json"), JSON.stringify({
+      id: "com.example.junction",
+      name: "Junction reload fixture",
+      version: "0.2.0",
+      githubRepo: "example/junction-reload",
+      scope: "main",
+      permissions: ["ipc"],
+    }));
+    const writeTweak = (version: number) => writeFileSync(
+      join(sourceRoot, "index.js"),
+      `module.exports = { start(api) { api.ipc.handle("version", () => ${version}); } };\n`,
+    );
+    writeTweak(1);
+    try {
+      symlinkSync(sourceRoot, tweakRoot, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      t.skip("directory link creation is not available");
+      return;
+    }
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const electron = fakeElectron(
+      { registerPreloadScript: () => "default" },
+      undefined,
+      undefined,
+      (channel, handler) => handlers.set(channel, handler),
+      (channel) => handlers.delete(channel),
+    );
+
+    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    const channel = "claudepp:com.example.junction:version";
+    assert.equal(await handlers.get(channel)?.({}), 1);
+
+    writeTweak(2);
+    await handlers.get("claudepp:reload-tweaks")?.({});
+
+    assert.equal(await handlers.get(channel)?.({}), 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("proxies Renderer filesystem access only for a declared Tweak", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-renderer-fs-"));
   try {
@@ -345,6 +401,7 @@ function fakeElectron(
     listener: (_event: unknown, webContents: Record<string, unknown>) => void,
   ) => void,
   captureIpcHandle?: (channel: string, handler: (...args: unknown[]) => unknown) => void,
+  captureIpcRemoveHandler?: (channel: string) => void,
 ): typeof import("electron") {
   return {
     app: {
@@ -363,6 +420,9 @@ function fakeElectron(
     ipcMain: {
       handle(channel: string, handler: (...args: unknown[]) => unknown) {
         captureIpcHandle?.(channel, handler);
+      },
+      removeHandler(channel: string) {
+        captureIpcRemoveHandler?.(channel);
       },
     },
   } as unknown as typeof import("electron");
