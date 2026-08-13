@@ -1,0 +1,9 @@
+{
+  "id": "com.claudeplusplus.probe",
+  "name": "Claude++ Core Probe",
+  "version": "0.2.0",
+  "githubRepo": "claude-plusplus/core-probe",
+  "scope": "renderer",
+  "main": "index.js",
+  "permissions": ["settings"]
+}

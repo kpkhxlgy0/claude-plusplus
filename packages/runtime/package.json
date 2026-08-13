@@ -1,0 +1,20 @@
+{
+  "name": "@claude-plusplus/runtime",
+  "version": "0.2.0",
+  "description": "Claude++ in-app Runtime and Tweak host",
+  "type": "commonjs",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@claude-plusplus/sdk": "*",
+    "chokidar": "^4.0.0"
+  },
+  "devDependencies": {
+    "electron": "^41.3.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.9.0"
+  },
+  "license": "MIT"
+}

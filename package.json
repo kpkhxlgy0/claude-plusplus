@@ -1,0 +1,36 @@
+{
+  "name": "claude-plusplus",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Unofficial tweak platform for Claude Code Desktop on Windows",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kpkhxlgy0/ClaudePlusPlus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kpkhxlgy0/ClaudePlusPlus/issues"
+  },
+  "homepage": "https://github.com/kpkhxlgy0/ClaudePlusPlus#readme",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build --workspace @claude-plusplus/sdk && npm run build --workspace @claude-plusplus/runtime && npm run build --workspace @claude-plusplus/installer && npm run build --workspace @claude-plusplus/loader",
+    "test": "npm run build && node --import tsx --test test/*.test.mjs packages/*/test/*.test.*",
+    "package:windows": "pwsh -File scripts/package-windows.ps1"
+  },
+  "bin": {
+    "claudeplusplus": "bin/claudeplusplus.js",
+    "claude-plusplus": "bin/claudeplusplus.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
