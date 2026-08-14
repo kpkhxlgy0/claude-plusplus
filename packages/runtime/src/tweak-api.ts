@@ -7,6 +7,7 @@ import type {
 } from "@claude-plusplus/sdk";
 import { createDiskStorage } from "./storage.js";
 import { createTweakFs } from "./tweak-fs.js";
+import { createClaudeSessionsApiLease } from "./preload/claude-sessions-adapter.js";
 import {
   createMainTweakIpc,
   createRendererTweakIpc,
@@ -67,6 +68,10 @@ export function createRendererTweakApiLease(options: RendererTweakApiOptions): T
     createRendererFs(options.manifest.id, options.ipc),
     options.manifest,
   );
+  const claudeSessions = options.manifest.permissions?.includes("claude-sessions")
+    ? createClaudeSessionsApiLease(options.ipc)
+    : undefined;
+  const claude = claudeSessions ? { sessions: claudeSessions.api } : undefined;
   return {
     api: {
       manifest: options.manifest,
@@ -75,8 +80,12 @@ export function createRendererTweakApiLease(options: RendererTweakApiOptions): T
       process: "renderer",
       ipc: ipc.api,
       fs,
+      ...(claude ? { claude } : {}),
     },
-    dispose: () => ipc.dispose(),
+    async dispose(): Promise<void> {
+      claudeSessions?.dispose();
+      await ipc.dispose();
+    },
   };
 }
 

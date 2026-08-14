@@ -30,7 +30,7 @@ import {
   ensureWindowsStoreMirror,
 } from "../windows-store-mirror.js";
 
-const version = "0.2.1";
+const version = "0.2.2";
 const defaultUpdateRepo = "kpkhxlgy0/claude-plusplus";
 const execFileAsync = promisify(execFile);
 

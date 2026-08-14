@@ -5,6 +5,22 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.2.2
+
+Release notes: [docs/releases/0.2.2.md](docs/releases/0.2.2.md)
+
+### Added
+
+- Added a permission-scoped Claude Sessions API for resolving a session file and reading only its absolute workspace
+  root.
+
+### Fixed
+
+- Restored Renderer Tweak evaluation on current Claude Desktop while composing Claude's own response-header policy
+  listener.
+- Kept Safe Mode from relaxing the Renderer Content Security Policy.
+- Revoked retained Claude Sessions API references when their Renderer Tweak lease is disposed.
+
 ## 0.2.1
 
 Release notes: [docs/releases/0.2.1.md](docs/releases/0.2.1.md)

@@ -7,6 +7,7 @@ import { createMainTweakApiLease } from "./tweak-api.js";
 import type { MainTweakIpcBridge } from "./tweak-ipc.js";
 import { TweakLifecycle, type RunnableTweak } from "./tweak-lifecycle.js";
 import { isTweakEnabled, readRuntimeConfig } from "./config.js";
+import { installRendererTweakCspCompatibility } from "./renderer-tweak-csp.js";
 import { TweakManager } from "./tweak-manager.js";
 import { installManagementIpc } from "./management-ipc.js";
 
@@ -60,6 +61,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
   const registeredSessions = new WeakSet<Electron.Session>();
   const register = (session: Electron.Session) => {
     if (registeredSessions.has(session)) return;
+    if (!safeMode) installRendererTweakCspCompatibility(session, log);
     registerPreload(session, deps.preloadPath, log);
     registeredSessions.add(session);
   };
