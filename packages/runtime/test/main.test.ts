@@ -17,7 +17,7 @@ test("registers every Settings management handler once", async () => {
   try {
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const electron = fakeElectron(
-      { registerPreloadScript: () => "default" },
+      fakeSession(() => "default"),
       undefined,
       undefined,
       (channel, handler) => handlers.set(channel, handler),
@@ -57,12 +57,10 @@ test("registers the Claude++ preload additively with modern Electron", async () 
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-main-"));
   try {
     const registrations: unknown[] = [];
-    const electron = fakeElectron({
-      registerPreloadScript(options: unknown) {
-        registrations.push(options);
-        return "claude-plusplus";
-      },
-    });
+    const electron = fakeElectron(fakeSession((options) => {
+      registrations.push(options);
+      return "claude-plusplus";
+    }));
 
     await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
 
@@ -81,6 +79,8 @@ test("preserves existing preloads when the modern API is unavailable", async () 
   try {
     let preloads = ["C:\\official\\preload.js"];
     const electron = fakeElectron({
+      ...fakeSession(),
+      registerPreloadScript: undefined,
       getPreloads: () => preloads,
       setPreloads: (value: string[]) => { preloads = value; },
     });
@@ -99,17 +99,15 @@ test("registers the preload on Sessions created after bootstrap", async () => {
     let sessionCreated: ((session: Record<string, unknown>) => void) | undefined;
     const laterRegistrations: unknown[] = [];
     const electron = fakeElectron(
-      { registerPreloadScript: () => "default" },
+      fakeSession(() => "default"),
       (listener) => { sessionCreated = listener; },
     );
 
     await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
-    sessionCreated?.({
-      registerPreloadScript(options: unknown) {
-        laterRegistrations.push(options);
-        return "later";
-      },
-    });
+    sessionCreated?.(fakeSession((options) => {
+      laterRegistrations.push(options);
+      return "later";
+    }));
 
     assert.deepEqual(laterRegistrations, [{
       type: "frame",
@@ -126,13 +124,11 @@ test("registers the default Session only once when session-created fires during 
   try {
     let sessionCreated: ((session: Record<string, unknown>) => void) | undefined;
     let registrationCount = 0;
-    const defaultSession = {
-      registerPreloadScript() {
-        registrationCount += 1;
-        if (registrationCount > 1) throw new Error("duplicate preload ID");
-        return "claude-plusplus";
-      },
-    };
+    const defaultSession = fakeSession(() => {
+      registrationCount += 1;
+      if (registrationCount > 1) throw new Error("duplicate preload ID");
+      return "claude-plusplus";
+    });
     const electron = fakeElectron(
       defaultSession,
       (listener) => { sessionCreated = listener; },
@@ -149,18 +145,48 @@ test("registers the default Session only once when session-created fires during 
   }
 });
 
+test("registers Renderer preload and CSP compatibility once per Session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-session-csp-"));
+  try {
+    let sessionCreated: ((session: Record<string, unknown>) => void) | undefined;
+    let defaultPreloads = 0;
+    let defaultCspHooks = 0;
+    let laterPreloads = 0;
+    let laterCspHooks = 0;
+    const defaultSession = fakeSession(
+      () => { defaultPreloads += 1; return "claude-plusplus"; },
+      () => { defaultCspHooks += 1; },
+    );
+    const laterSession = fakeSession(
+      () => { laterPreloads += 1; return "claude-plusplus-later"; },
+      () => { laterCspHooks += 1; },
+    );
+    const electron = fakeElectron(defaultSession, (listener) => { sessionCreated = listener; });
+    electron.app.whenReady = async () => { sessionCreated?.(defaultSession); };
+
+    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    sessionCreated?.(laterSession);
+    sessionCreated?.(laterSession);
+
+    assert.deepEqual(
+      { defaultPreloads, defaultCspHooks, laterPreloads, laterCspHooks },
+      { defaultPreloads: 1, defaultCspHooks: 1, laterPreloads: 1, laterCspHooks: 1 },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("registers the default Session from the ready event before the official window can be created", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-ready-order-"));
   try {
     let readyListener: (() => void) | undefined;
     let officialWindowCreated = false;
     let registrationWasEarly = false;
-    const defaultSession = {
-      registerPreloadScript() {
-        registrationWasEarly = !officialWindowCreated;
-        return "claude-plusplus";
-      },
-    };
+    const defaultSession = fakeSession(() => {
+      registrationWasEarly = !officialWindowCreated;
+      return "claude-plusplus";
+    });
     const electron = fakeElectron(defaultSession);
     electron.app.on = ((event: string, listener: () => void) => {
       if (event === "ready") readyListener = listener;
@@ -184,7 +210,7 @@ test("records Renderer sandbox settings and preload failures from created web co
     let webContentsCreated: ((_event: unknown, webContents: Record<string, unknown>) => void) | undefined;
     let preloadError: ((_event: unknown, path: string, error: Error) => void) | undefined;
     const electron = fakeElectron(
-      { registerPreloadScript: () => "default" },
+      fakeSession(() => "default"),
       undefined,
       (listener) => { webContentsCreated = listener; },
     );
@@ -223,7 +249,7 @@ test("serves the full Tweak catalog and validated Renderer source through separa
     writeFileSync(join(tweakRoot, "index.js"), "module.exports = { start() {} };\n");
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const electron = fakeElectron(
-      { registerPreloadScript: () => "default" },
+      fakeSession(() => "default"),
       undefined,
       undefined,
       (channel, handler) => handlers.set(channel, handler),
@@ -286,7 +312,7 @@ test("reload evaluates changed main Tweak source installed through a junction", 
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const electron = fakeElectron(
-      { registerPreloadScript: () => "default" },
+      fakeSession(() => "default"),
       undefined,
       undefined,
       (channel, handler) => handlers.set(channel, handler),
@@ -328,7 +354,7 @@ test("proxies Renderer filesystem access only for a declared Tweak", async () =>
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const electron = fakeElectron(
-      { registerPreloadScript: () => "default" },
+      fakeSession(() => "default"),
       undefined,
       undefined,
       (channel, handler) => handlers.set(channel, handler),
@@ -371,14 +397,16 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
     }));
     writeFileSync(join(tweakRoot, "index.js"), "module.exports = { start() {} };\n");
     let registrationCount = 0;
+    let cspHookCount = 0;
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const electron = fakeElectron(
-      {
-        registerPreloadScript() {
+      fakeSession(
+        () => {
           registrationCount += 1;
           return "claude-plusplus";
         },
-      },
+        () => { cspHookCount += 1; },
+      ),
       undefined,
       undefined,
       (channel, handler) => handlers.set(channel, handler),
@@ -388,11 +416,22 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
     const payload = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{ enabled: boolean }>;
 
     assert.equal(registrationCount, 1);
+    assert.equal(cspHookCount, 0);
     assert.deepEqual(payload.map((item) => item.enabled), [false]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+function fakeSession(
+  registerPreloadScript: (options: unknown) => string = () => "claude-plusplus",
+  onHeadersReceived: (listener: unknown) => void = () => {},
+): Record<string, unknown> {
+  return {
+    registerPreloadScript,
+    webRequest: { onHeadersReceived },
+  };
+}
 
 function fakeElectron(
   defaultSession: Record<string, unknown>,

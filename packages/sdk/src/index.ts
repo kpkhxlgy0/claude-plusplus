@@ -5,6 +5,7 @@ export const VALID_TWEAK_PERMISSIONS = [
   "filesystem",
   "network",
   "settings",
+  "claude-sessions",
 ] as const;
 
 export type TweakScope = (typeof VALID_TWEAK_SCOPES)[number];
@@ -84,6 +85,15 @@ export interface TweakFs {
   exists(relPath: string): Promise<boolean>;
 }
 
+export interface ClaudeSessionsApi {
+  resolveFile(sessionId: string, filePath: string): Promise<string | null>;
+  getWorkspaceRoot(sessionId: string): Promise<string | null>;
+}
+
+export interface ClaudeApi {
+  sessions: ClaudeSessionsApi;
+}
+
 export interface TweakApi {
   manifest: Readonly<TweakManifest>;
   storage: TweakStorage;
@@ -92,6 +102,7 @@ export interface TweakApi {
   settings?: SettingsApi;
   ipc: TweakIpc;
   fs: TweakFs;
+  claude?: ClaudeApi;
 }
 
 export interface Tweak {

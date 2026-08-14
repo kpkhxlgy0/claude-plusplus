@@ -15,13 +15,13 @@ test("uses the Claude++ four-package topology", () => {
   }
 });
 
-test("uses version 0.2.1 across the root and every workspace package", () => {
-  assert.equal(rootPackage.version, "0.2.1");
+test("uses version 0.2.2 across the root and every workspace package", () => {
+  assert.equal(rootPackage.version, "0.2.2");
   for (const name of ["installer", "loader", "runtime", "sdk"]) {
     const packageJson = JSON.parse(
       readFileSync(new URL(`../packages/${name}/package.json`, import.meta.url), "utf8"),
     );
-    assert.equal(packageJson.version, "0.2.1", `${name} package version`);
+    assert.equal(packageJson.version, "0.2.2", `${name} package version`);
   }
 });
 
@@ -32,9 +32,19 @@ test("records the exact Codex++ provenance", () => {
   assert.match(notice, /Copyright \(c\) 2026 Bennett/);
 });
 
-test("keeps private Claude workflows out of the public SDK and runtime", () => {
+test("limits the public Claude host adapter to focused session-file resolution", () => {
+  const sdk = readFileSync(new URL("../packages/sdk/src/index.ts", import.meta.url), "utf8");
+  const adapter = readFileSync(
+    new URL("../packages/runtime/src/preload/claude-sessions-adapter.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(sdk, /resolveFile\(sessionId: string, filePath: string\): Promise<string \| null>/);
+  assert.match(sdk, /getWorkspaceRoot\(sessionId: string\): Promise<string \| null>/);
+  assert.match(adapter, /LocalSessions_\$_resolveSessionFile/);
+  assert.match(adapter, /LocalSessions_\$_getSession/);
+
   const forbidden =
-    /api\.claude|ClaudeSession|ClaudeDraft|ClaudeWorkspaceTrust|claude-composer|claude-sessions-|claude-workspace-trust/;
+    /ClaudeDraft|ClaudeWorkspaceTrust|claude-composer|claude-workspace-trust|epitaxy-draft/;
   const roots = [
     new URL("../packages/sdk/src/", import.meta.url),
     new URL("../packages/runtime/src/", import.meta.url),

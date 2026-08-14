@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$archive = Join-Path $repoRoot 'dist\claude-plusplus-0.2.1-win-x64.zip'
+$archive = Join-Path $repoRoot 'dist\claude-plusplus-0.2.2-win-x64.zip'
 $archiveHash = "$archive.sha256"
 if (!(Test-Path -LiteralPath $archive)) {
     throw "Windows release archive does not exist: $archive"
@@ -107,8 +107,8 @@ try {
         $env:LOCALAPPDATA = $previousLocalAppData
         $env:USERPROFILE = $previousUserProfile
     }
-    if ($output -ne '0.2.1') {
-        throw "Expected packaged CLI version 0.2.1, received: $output"
+    if ($output -ne '0.2.2') {
+        throw "Expected packaged CLI version 0.2.2, received: $output"
     }
     Write-Output "Packaged CLI version, status, and Doctor passed without system Node.js or npm on PATH."
     Write-Output "Package SHA-256: $actualHash"

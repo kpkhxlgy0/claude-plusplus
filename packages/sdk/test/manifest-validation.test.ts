@@ -4,6 +4,7 @@ import {
   defineTweak,
   VALID_TWEAK_PERMISSIONS,
   validateTweakManifest,
+  type ClaudeApi,
   type SettingsApi,
   type SettingsHandle,
   type SettingsPage,
@@ -14,7 +15,7 @@ import {
   type TweakStorage,
 } from "../src/index.ts";
 
-test("accepts an explicit renderer manifest with generic permissions", () => {
+test("accepts an explicit renderer manifest with Claude Sessions permission", () => {
   const result = validateTweakManifest({
     id: "com.claudeplusplus.probe",
     name: "Claude++ Probe",
@@ -22,7 +23,7 @@ test("accepts an explicit renderer manifest with generic permissions", () => {
     githubRepo: "example/claudeplusplus-probe",
     scope: "renderer",
     main: "index.js",
-    permissions: ["settings", "ipc"],
+    permissions: ["settings", "ipc", "claude-sessions"],
   });
 
   assert.equal(result.ok, true);
@@ -30,7 +31,7 @@ test("accepts an explicit renderer manifest with generic permissions", () => {
   assert.deepEqual(result.warnings, []);
 });
 
-test("accepts complete Tweak metadata and generic permissions", () => {
+test("accepts complete Tweak metadata and permissions", () => {
   for (const author of [
     "Example Author",
     { name: "Example Author", url: "https://example.com", email: "author@example.com" },
@@ -52,6 +53,7 @@ test("accepts complete Tweak metadata and generic permissions", () => {
         "settings",
         "ipc",
         "filesystem",
+        "claude-sessions",
       ],
     });
 
@@ -111,12 +113,13 @@ test("rejects Codex-only permissions", () => {
   assert.equal(result.errors[0]?.path, "permissions[0]");
 });
 
-test("exposes only generic permissions and rejects former private permissions", () => {
+test("exposes the focused Claude Sessions permission and rejects former private permissions", () => {
   assert.deepEqual(VALID_TWEAK_PERMISSIONS, [
     "ipc",
     "filesystem",
     "network",
     "settings",
+    "claude-sessions",
   ]);
 
   for (const permission of [
@@ -153,7 +156,7 @@ test("defineTweak preserves the lifecycle object", () => {
   assert.equal(defineTweak(tweak), tweak);
 });
 
-test("public API contracts support an isolated host-neutral tweak", () => {
+test("public API contracts support a permission-scoped Claude host adapter", async () => {
   const values = new Map<string, unknown>();
   const storage: TweakStorage = {
     get<T = unknown>(key: string, fallback?: T): T {
@@ -213,6 +216,19 @@ test("public API contracts support an isolated host-neutral tweak", () => {
       return handle;
     },
   };
+  const claude: ClaudeApi = {
+    sessions: {
+      async resolveFile(sessionId, filePath): Promise<string | null> {
+        assert.equal(sessionId, "local_session");
+        assert.equal(filePath, "Assets/GameEntry.cs");
+        return "D:\\workspace\\sgproj\\Assets\\GameEntry.cs";
+      },
+      async getWorkspaceRoot(sessionId): Promise<string | null> {
+        assert.equal(sessionId, "local_session");
+        return "D:\\workspace\\sgproj";
+      },
+    },
+  };
   const api: TweakApi = {
     manifest: {
       id: "com.example.complete-tweak",
@@ -231,11 +247,19 @@ test("public API contracts support an isolated host-neutral tweak", () => {
     settings,
     ipc,
     fs,
+    claude,
   };
 
   storage.set("enabled", true);
   assert.equal(storage.get("enabled", false), true);
   assert.equal(api.settings?.register(section), handle);
   assert.equal(api.settings?.registerPage(page), handle);
-  assert.equal("claude" in api, false);
+  assert.equal(
+    await api.claude?.sessions.resolveFile("local_session", "Assets/GameEntry.cs"),
+    "D:\\workspace\\sgproj\\Assets\\GameEntry.cs",
+  );
+  assert.equal(
+    await api.claude?.sessions.getWorkspaceRoot("local_session"),
+    "D:\\workspace\\sgproj",
+  );
 });

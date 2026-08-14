@@ -70,6 +70,78 @@ test("Renderer API mirrors storage and proxies permitted filesystem calls", asyn
   await second.dispose();
 });
 
+test("Renderer API only exposes Claude Sessions with its focused permission", async () => {
+  const withoutPermission = createRendererTweakApiLease({
+    manifest: manifest([]),
+    log,
+    storage: localStorageBridge(new Map()),
+    ipc: rendererIpcBridge(async () => undefined),
+  });
+  assert.equal(withoutPermission.api.claude, undefined);
+  await withoutPermission.dispose();
+
+  const invoked: unknown[][] = [];
+  const withPermission = createRendererTweakApiLease({
+    manifest: manifest(["claude-sessions"]),
+    log,
+    storage: localStorageBridge(new Map()),
+    ipc: rendererIpcBridge(async (channel, ...args) => {
+      invoked.push([channel, ...args]);
+      if (channel.endsWith("_getSession")) {
+        return { cwd: "D:\\workspace\\sgproj" };
+      }
+      return "D:\\workspace\\sgproj\\Assets\\Waiting.prefab";
+    }),
+  });
+  assert.equal(
+    await withPermission.api.claude?.sessions.resolveFile("local-session-id", "Waiting.prefab"),
+    "D:\\workspace\\sgproj\\Assets\\Waiting.prefab",
+  );
+  assert.equal(
+    await withPermission.api.claude?.sessions.getWorkspaceRoot("local-session-id"),
+    "D:\\workspace\\sgproj",
+  );
+  assert.deepEqual(invoked, [
+    [
+      "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_resolveSessionFile",
+      "local-session-id",
+      "Waiting.prefab",
+    ],
+    [
+      "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_getSession",
+      "local-session-id",
+    ],
+  ]);
+  await withPermission.dispose();
+});
+
+test("Renderer API revokes retained Claude Sessions references on disposal", async () => {
+  let invokeCount = 0;
+  const lease = createRendererTweakApiLease({
+    manifest: manifest(["claude-sessions"]),
+    log,
+    storage: localStorageBridge(new Map()),
+    ipc: rendererIpcBridge(async () => {
+      invokeCount += 1;
+      return "D:\\workspace\\sgproj\\Assets\\Waiting.prefab";
+    }),
+  });
+  const sessions = lease.api.claude?.sessions;
+  assert.ok(sessions);
+
+  await lease.dispose();
+
+  await assert.rejects(
+    () => sessions.resolveFile("local-session-id", "Waiting.prefab"),
+    /disposed/,
+  );
+  await assert.rejects(
+    () => sessions.getWorkspaceRoot("local-session-id"),
+    /disposed/,
+  );
+  assert.equal(invokeCount, 0);
+});
+
 const log: TweakLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 function manifest(permissions: TweakManifest["permissions"]): TweakManifest {
