@@ -13,7 +13,7 @@ test("returns the safe default update configuration with no prior result", () =>
   const fixture = updateServiceFixture();
   try {
     const view = getUpdateConfigView(fixture.paths);
-    assert.equal(view.version, "0.2.3");
+    assert.equal(view.version, "0.2.4");
     assert.equal(view.autoUpdate, false);
     assert.equal(view.updateChannel, "stable");
     assert.equal(view.updateRepo, "kpkhxlgy0/claude-plusplus");

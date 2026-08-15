@@ -1,6 +1,6 @@
 {
   "name": "@claude-plusplus/installer",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Windows installer and recovery CLI for Claude++",
   "type": "module",
   "main": "dist/cli.js",

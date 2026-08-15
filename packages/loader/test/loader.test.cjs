@@ -123,7 +123,7 @@ module.exports = {
       join(app, "package.json"),
       JSON.stringify({
         main: "loader.cjs",
-        __claudepp: { originalMain: "original.cjs", userRoot, loaderVersion: "0.2.3" },
+        __claudepp: { originalMain: "original.cjs", userRoot, loaderVersion: "0.2.4" },
       }),
     );
     const env = { ...process.env };

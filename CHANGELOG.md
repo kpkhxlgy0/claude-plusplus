@@ -5,6 +5,21 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.2.4
+
+Release notes: [docs/releases/0.2.4.md](docs/releases/0.2.4.md)
+
+### Added
+
+- Added a permission-gated, declarative `startup-environment` Tweak API with exact key ownership.
+- Applied valid per-Tweak startup snapshots before Claude's original Main entry without loading Tweak JavaScript early.
+
+### Security
+
+- Failed closed on malformed, partial, incompatible, disabled, Safe Mode, and ownership-conflicting snapshots.
+- Restored the incoming process environment before a Tweak-requested relaunch and revoked retained API references when
+  their Main Tweak lease is disposed.
+
 ## 0.2.3
 
 Release notes: [docs/releases/0.2.3.md](docs/releases/0.2.3.md)
