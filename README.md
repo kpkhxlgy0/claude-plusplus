@@ -23,6 +23,15 @@ Download and extract the Windows release, then run `install.ps1`. The release in
 Stable and Prerelease channels do not require a system Node.js or npm installation. The Custom source channel builds
 an explicitly trusted GitHub repository and requires system Node.js 24+.
 
+To install from source, install Node.js 24 or newer with npm, clone the repository, and run:
+
+```powershell
+pwsh -File .\install.ps1
+```
+
+The script builds the checkout with npm before installing it. It does not download or install Node.js; when Node.js
+24+ or npm is unavailable, it prints the requirement and exits without starting installation.
+
 The command name used below is `claudeplusplus`. In an extracted or installed Windows package, its launcher is
 `bin\claudeplusplus.cmd`.
 
