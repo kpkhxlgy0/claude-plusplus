@@ -7,12 +7,12 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kpkhxlgy0/ClaudePlusPlus.git"
+    "url": "https://github.com/kpkhxlgy0/claude-plusplus.git"
   },
   "bugs": {
-    "url": "https://github.com/kpkhxlgy0/ClaudePlusPlus/issues"
+    "url": "https://github.com/kpkhxlgy0/claude-plusplus/issues"
   },
-  "homepage": "https://github.com/kpkhxlgy0/ClaudePlusPlus#readme",
+  "homepage": "https://github.com/kpkhxlgy0/claude-plusplus#readme",
   "workspaces": [
     "packages/*"
   ],
