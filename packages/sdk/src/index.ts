@@ -6,10 +6,33 @@ export const VALID_TWEAK_PERMISSIONS = [
   "network",
   "settings",
   "claude-sessions",
+  "startup-environment",
 ] as const;
 
 export type TweakScope = (typeof VALID_TWEAK_SCOPES)[number];
 export type TweakPermission = (typeof VALID_TWEAK_PERMISSIONS)[number];
+
+export interface StartupEnvironmentDeclaration {
+  keys: string[];
+}
+
+export interface StartupEnvironmentConfig {
+  enabled: boolean;
+  variables: Record<string, string>;
+}
+
+export interface StartupEnvironmentStatus {
+  saved: StartupEnvironmentConfig | null;
+  applied: StartupEnvironmentConfig | null;
+  restartRequired: boolean;
+  error?: string;
+}
+
+export interface StartupEnvironmentApi {
+  getStatus(): StartupEnvironmentStatus;
+  save(config: StartupEnvironmentConfig): StartupEnvironmentStatus;
+  relaunch(): void;
+}
 
 export interface TweakManifest {
   id: string;
@@ -25,6 +48,7 @@ export interface TweakManifest {
   scope?: TweakScope;
   main?: string;
   permissions?: TweakPermission[];
+  startupEnvironment?: StartupEnvironmentDeclaration;
 }
 
 export interface TweakAuthor {
@@ -110,6 +134,7 @@ export interface TweakApi {
   ipc: TweakIpc;
   fs: TweakFs;
   claude?: ClaudeApi;
+  startupEnvironment?: StartupEnvironmentApi;
 }
 
 export interface Tweak {
@@ -206,6 +231,53 @@ export function validateTweakManifest(manifest: unknown): TweakManifestValidatio
             message: "permission must be a known Claude++ permission string",
           });
         }
+      });
+    }
+  }
+
+  const hasStartupEnvironmentPermission = Array.isArray(manifest.permissions) &&
+    manifest.permissions.includes("startup-environment");
+  const hasStartupEnvironmentDeclaration = manifest.startupEnvironment !== undefined;
+  if (hasStartupEnvironmentPermission !== hasStartupEnvironmentDeclaration) {
+    errors.push({
+      path: "startupEnvironment",
+      message: "startupEnvironment permission and declaration must be provided together",
+    });
+  }
+  if (hasStartupEnvironmentDeclaration) {
+    if (!isRecord(manifest.startupEnvironment)) {
+      errors.push({ path: "startupEnvironment", message: "startupEnvironment must be an object" });
+    } else {
+      const keys = manifest.startupEnvironment.keys;
+      if (!Array.isArray(keys) || keys.length === 0) {
+        errors.push({
+          path: "startupEnvironment.keys",
+          message: "startupEnvironment.keys must be a non-empty array",
+        });
+      } else {
+        const seen = new Set<string>();
+        keys.forEach((key, index) => {
+          if (typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+            errors.push({
+              path: `startupEnvironment.keys[${index}]`,
+              message: "startup environment key must be a valid environment variable name",
+            });
+            return;
+          }
+          if (seen.has(key)) {
+            errors.push({
+              path: `startupEnvironment.keys[${index}]`,
+              message: "startup environment keys must be unique",
+            });
+          }
+          seen.add(key);
+        });
+      }
+    }
+    if (manifest.scope === "renderer") {
+      errors.push({
+        path: "startupEnvironment",
+        message: "startup environment requires a Main-capable Tweak scope",
       });
     }
   }

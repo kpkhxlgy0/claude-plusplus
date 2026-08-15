@@ -9,6 +9,9 @@ import {
   type SettingsHandle,
   type SettingsPage,
   type SettingsSection,
+  type StartupEnvironmentApi,
+  type StartupEnvironmentConfig,
+  type StartupEnvironmentStatus,
   type TweakApi,
   type TweakFs,
   type TweakIpc,
@@ -120,6 +123,7 @@ test("exposes the focused Claude Sessions permission and rejects former private 
     "network",
     "settings",
     "claude-sessions",
+    "startup-environment",
   ]);
 
   for (const permission of [
@@ -144,6 +148,62 @@ test("exposes the focused Claude Sessions permission and rejects former private 
 
     assert.equal(result.ok, false, permission);
     assert.equal(result.errors[0]?.path, "permissions[0]", permission);
+  }
+});
+
+test("accepts a Main-capable startup environment declaration", () => {
+  const result = validateTweakManifest({
+    id: "com.example.startup-env",
+    name: "Startup env",
+    version: "0.1.0",
+    githubRepo: "example/startup-env",
+    scope: "both",
+    permissions: ["startup-environment"],
+    startupEnvironment: { keys: ["EXAMPLE_ONE", "EXAMPLE_TWO"] },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+});
+
+test("requires startup environment permission and declaration together", () => {
+  for (const manifest of [
+    { permissions: ["startup-environment"] },
+    { startupEnvironment: { keys: ["EXAMPLE_ONE"] } },
+  ]) {
+    const result = validateTweakManifest({
+      id: "com.example.invalid-startup-env",
+      name: "Invalid startup env",
+      version: "0.1.0",
+      githubRepo: "example/invalid-startup-env",
+      scope: "both",
+      ...manifest,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.errors.some((issue) => issue.path.startsWith("startupEnvironment")), true);
+  }
+});
+
+test("rejects invalid, duplicate, empty, and Renderer-only startup environment declarations", () => {
+  for (const manifest of [
+    { startupEnvironment: { keys: ["BAD=KEY"] } },
+    { startupEnvironment: { keys: ["DUP", "DUP"] } },
+    { startupEnvironment: { keys: [] } },
+    { scope: "renderer", startupEnvironment: { keys: ["EXAMPLE_ONE"] } },
+  ]) {
+    const result = validateTweakManifest({
+      id: "com.example.invalid-startup-env",
+      name: "Invalid startup env",
+      version: "0.1.0",
+      githubRepo: "example/invalid-startup-env",
+      scope: "both",
+      permissions: ["startup-environment"],
+      ...manifest,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.errors.some((issue) => issue.path.startsWith("startupEnvironment")), true);
   }
 });
 
@@ -237,6 +297,28 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
       },
     },
   };
+  const startupConfig: StartupEnvironmentConfig = {
+    enabled: true,
+    variables: { EXAMPLE_MAX: "272000" },
+  };
+  const startupStatus: StartupEnvironmentStatus = {
+    saved: startupConfig,
+    applied: null,
+    restartRequired: true,
+  };
+  let relaunched = false;
+  const startupEnvironment: StartupEnvironmentApi = {
+    getStatus(): StartupEnvironmentStatus {
+      return startupStatus;
+    },
+    save(config): StartupEnvironmentStatus {
+      assert.equal(config, startupConfig);
+      return startupStatus;
+    },
+    relaunch(): void {
+      relaunched = true;
+    },
+  };
   const api: TweakApi = {
     manifest: {
       id: "com.example.complete-tweak",
@@ -257,6 +339,12 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
     fs,
     claude,
   };
+  const mainApi: TweakApi = {
+    ...api,
+    process: "main",
+    claude: undefined,
+    startupEnvironment,
+  };
 
   storage.set("enabled", true);
   assert.equal(storage.get("enabled", false), true);
@@ -274,4 +362,8 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
     await api.claude?.sessions.getWorkspaceRoot("local_session"),
     "D:\\workspace\\sgproj",
   );
+  assert.equal(mainApi.startupEnvironment?.getStatus(), startupStatus);
+  assert.equal(mainApi.startupEnvironment?.save(startupConfig), startupStatus);
+  mainApi.startupEnvironment?.relaunch();
+  assert.equal(relaunched, true);
 });
