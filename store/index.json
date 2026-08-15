@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-15T11:04:37Z",
+  "entries": [
+    {
+      "id": "com.kpk.gpt-context-window",
+      "manifest": {
+        "id": "com.kpk.gpt-context-window",
+        "name": "GPT Context Window",
+        "version": "0.1.0",
+        "githubRepo": "kpkhxlgy0/gpt-context-window",
+        "iconUrl": "./icon.png",
+        "description": "Configure Claude Desktop client-side context and automatic-compaction thresholds.",
+        "author": "KPK",
+        "tags": [
+          "gpt",
+          "context",
+          "compaction"
+        ],
+        "minRuntime": "0.2.4",
+        "scope": "both",
+        "main": "index.js",
+        "permissions": [
+          "ipc",
+          "settings",
+          "startup-environment"
+        ],
+        "startupEnvironment": {
+          "keys": [
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
+          ]
+        }
+      },
+      "repo": "kpkhxlgy0/gpt-context-window",
+      "approvedCommitSha": "3b86b624f3574f6b84b3d0ecab4779e0d206c7f0",
+      "approvedAt": "2026-08-15T11:04:37Z",
+      "approvedBy": "KPK",
+      "platforms": [
+        "win32"
+      ],
+      "releaseUrl": "https://github.com/kpkhxlgy0/gpt-context-window/releases/tag/v0.1.0"
+    }
+  ]
+}
