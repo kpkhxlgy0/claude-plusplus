@@ -15,12 +15,14 @@ import {
   type RendererTweakIpcBridge,
 } from "./tweak-ipc.js";
 import type { TweakApiLease } from "./tweak-lifecycle.js";
+import type { StartupEnvironmentService } from "./startup-environment.js";
 
 export interface MainTweakApiOptions {
   manifest: TweakManifest;
   userRoot: string;
   log: TweakLogger;
   ipc: MainTweakIpcBridge;
+  startupEnvironment: StartupEnvironmentService;
 }
 
 export interface RendererStorageBridge {
@@ -43,6 +45,9 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
     createTweakFs(options.userRoot, options.manifest.id),
     options.manifest,
   );
+  const startupEnvironment = options.manifest.permissions?.includes("startup-environment")
+    ? options.startupEnvironment.createApiLease(options.manifest)
+    : undefined;
   return {
     api: {
       manifest: options.manifest,
@@ -51,8 +56,10 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
       process: "main",
       ipc: ipc.api,
       fs,
+      ...(startupEnvironment ? { startupEnvironment: startupEnvironment.api } : {}),
     },
     async dispose(): Promise<void> {
+      startupEnvironment?.dispose();
       try {
         await ipc.dispose();
       } finally {

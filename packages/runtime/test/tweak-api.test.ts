@@ -8,15 +8,18 @@ import {
   createMainTweakApiLease,
   createRendererTweakApiLease,
 } from "../src/tweak-api.ts";
+import { initializeStartupEnvironment } from "../src/startup-environment.ts";
 
 test("Main API persists storage and gates filesystem operations", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-main-api-"));
   try {
+    const startupEnvironment = initializeStartupEnvironment({ userRoot: root, env: {}, log });
     const withoutFs = createMainTweakApiLease({
       manifest: manifest([]),
       userRoot: root,
       log,
       ipc: mainIpcBridge(),
+      startupEnvironment,
     });
     withoutFs.api.storage.set("enabled", true);
     await assert.rejects(() => withoutFs.api.fs.write("state.txt", "bad"), /filesystem permission/);
@@ -27,6 +30,7 @@ test("Main API persists storage and gates filesystem operations", async () => {
       userRoot: root,
       log,
       ipc: mainIpcBridge(),
+      startupEnvironment,
     });
     assert.equal(withFs.api.storage.get("enabled"), true);
     await withFs.api.fs.write("state.txt", "ok");
@@ -173,6 +177,58 @@ test("Renderer API revokes retained Claude Sessions references on disposal", asy
   assert.equal(invokeCount, 0);
 });
 
+test("Main API gates startup environment permission and revokes retained references", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-startup-api-"));
+  try {
+    const startupEnvironment = initializeStartupEnvironment({ userRoot: root, env: {}, log });
+    const withoutPermission = createMainTweakApiLease({
+      manifest: manifest([]),
+      userRoot: root,
+      log,
+      ipc: mainIpcBridge(),
+      startupEnvironment,
+    });
+    assert.equal(withoutPermission.api.startupEnvironment, undefined);
+    await withoutPermission.dispose();
+
+    const withPermission = createMainTweakApiLease({
+      manifest: startupManifest(),
+      userRoot: root,
+      log,
+      ipc: mainIpcBridge(),
+      startupEnvironment,
+    });
+    const retained = withPermission.api.startupEnvironment;
+    assert.ok(retained);
+    const config = { enabled: true, variables: { EXAMPLE_MAX: "272000" } };
+    assert.deepEqual(retained.save(config), {
+      saved: config,
+      applied: null,
+      restartRequired: true,
+    });
+
+    await withPermission.dispose();
+
+    assert.throws(() => retained.getStatus(), /disposed/);
+    assert.throws(() => retained.save(config), /disposed/);
+    assert.throws(() => retained.relaunch(), /disposed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Renderer API never exposes startup environment", async () => {
+  const lease = createRendererTweakApiLease({
+    manifest: startupManifest(),
+    log,
+    storage: localStorageBridge(new Map()),
+    ipc: rendererIpcBridge(async () => undefined),
+  });
+
+  assert.equal(lease.api.startupEnvironment, undefined);
+  await lease.dispose();
+});
+
 const log: TweakLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 function manifest(permissions: TweakManifest["permissions"]): TweakManifest {
@@ -183,6 +239,13 @@ function manifest(permissions: TweakManifest["permissions"]): TweakManifest {
     githubRepo: "example/api",
     scope: "both",
     permissions,
+  };
+}
+
+function startupManifest(): TweakManifest {
+  return {
+    ...manifest(["startup-environment"]),
+    startupEnvironment: { keys: ["EXAMPLE_MAX"] },
   };
 }
 

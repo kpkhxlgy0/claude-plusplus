@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { bootstrapRuntime } from "../src/main.ts";
+import { initializeStartupEnvironment } from "../src/startup-environment.ts";
 
 test("registers every Settings management handler once", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-handlers-"));
@@ -23,7 +24,12 @@ test("registers every Settings management handler once", async () => {
       (channel, handler) => handlers.set(channel, handler),
     );
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
 
     assert.deepEqual([...handlers.keys()].filter((name) => name.startsWith("claudepp:")).sort(), [
       "claudepp:check-claudepp-update",
@@ -62,7 +68,12 @@ test("registers the Claude++ preload additively with modern Electron", async () 
       return "claude-plusplus";
     }));
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
 
     assert.deepEqual(registrations, [{
       type: "frame",
@@ -85,7 +96,12 @@ test("preserves existing preloads when the modern API is unavailable", async () 
       setPreloads: (value: string[]) => { preloads = value; },
     });
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
 
     assert.deepEqual(preloads, ["C:\\official\\preload.js", "C:\\runtime\\preload.js"]);
   } finally {
@@ -103,7 +119,12 @@ test("registers the preload on Sessions created after bootstrap", async () => {
       (listener) => { sessionCreated = listener; },
     );
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
     sessionCreated?.(fakeSession((options) => {
       laterRegistrations.push(options);
       return "later";
@@ -137,7 +158,12 @@ test("registers the default Session only once when session-created fires during 
       sessionCreated?.(defaultSession);
     };
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
 
     assert.equal(registrationCount, 1);
   } finally {
@@ -164,7 +190,12 @@ test("registers Renderer preload and CSP compatibility once per Session", async 
     const electron = fakeElectron(defaultSession, (listener) => { sessionCreated = listener; });
     electron.app.whenReady = async () => { sessionCreated?.(defaultSession); };
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
     sessionCreated?.(laterSession);
     sessionCreated?.(laterSession);
 
@@ -196,7 +227,12 @@ test("registers the default Session from the ready event before the official win
       officialWindowCreated = true;
     };
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
 
     assert.equal(registrationWasEarly, true);
   } finally {
@@ -215,7 +251,12 @@ test("records Renderer sandbox settings and preload failures from created web co
       (listener) => { webContentsCreated = listener; },
     );
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
     webContentsCreated?.(undefined, {
       id: 17,
       getType: () => "window",
@@ -255,7 +296,12 @@ test("serves the full Tweak catalog and validated Renderer source through separa
       (channel, handler) => handlers.set(channel, handler),
     );
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
     const catalog = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{
       manifest: { id: string };
       entry: string;
@@ -319,7 +365,12 @@ test("reload evaluates changed main Tweak source installed through a junction", 
       (channel) => handlers.delete(channel),
     );
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
     const channel = "claudepp:com.example.junction:version";
     assert.equal(await handlers.get(channel)?.({}), 1);
 
@@ -359,7 +410,12 @@ test("proxies Renderer filesystem access only for a declared Tweak", async () =>
       undefined,
       (channel, handler) => handlers.set(channel, handler),
     );
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
     const fsHandler = handlers.get("claudepp:tweak-fs");
     assert.ok(fsHandler);
 
@@ -412,7 +468,12 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
       (channel, handler) => handlers.set(channel, handler),
     );
 
-    await bootstrapRuntime({ electron, userRoot: root, preloadPath: "C:\\runtime\\preload.js" });
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+    });
     const payload = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{ enabled: boolean }>;
 
     assert.equal(registrationCount, 1);
@@ -431,6 +492,14 @@ function fakeSession(
     registerPreloadScript,
     webRequest: { onHeadersReceived },
   };
+}
+
+function startupEnvironment(root: string) {
+  return initializeStartupEnvironment({
+    userRoot: root,
+    env: {},
+    log: { debug() {}, info() {}, warn() {}, error() {} },
+  });
 }
 
 function fakeElectron(

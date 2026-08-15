@@ -10,12 +10,17 @@ import { isTweakEnabled, readRuntimeConfig } from "./config.js";
 import { installRendererTweakCspCompatibility } from "./renderer-tweak-csp.js";
 import { TweakManager } from "./tweak-manager.js";
 import { installManagementIpc } from "./management-ipc.js";
+import {
+  initializeStartupEnvironment,
+  type StartupEnvironmentService,
+} from "./startup-environment.js";
 
 export interface RuntimeBootstrapDeps {
   electron: typeof import("electron");
   userRoot: string;
   preloadPath: string;
   sourceRoot?: string;
+  startupEnvironment: StartupEnvironmentService;
 }
 
 export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void> {
@@ -24,6 +29,10 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
   mkdirSync(logs, { recursive: true });
   mkdirSync(tweaks, { recursive: true });
   const log = createLogger(join(logs, "main.log"));
+  deps.startupEnvironment.attachAppBridge({
+    relaunch: () => deps.electron.app.relaunch(),
+    quit: () => deps.electron.app.quit(),
+  });
   const config = readRuntimeConfig(join(deps.userRoot, "config.json"));
   const safeMode = config.claudePlusPlus.safeMode;
   if (safeMode) {
@@ -39,6 +48,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
       userRoot: deps.userRoot,
       log,
       ipc,
+      startupEnvironment: deps.startupEnvironment,
     }));
   };
   const manager = new TweakManager({
@@ -235,12 +245,23 @@ function errorMessage(error: unknown): string {
 
 const userRoot = process.env.CLAUDE_PLUSPLUS_USER_ROOT;
 const runtimeRoot = process.env.CLAUDE_PLUSPLUS_RUNTIME;
+let startupEnvironment: StartupEnvironmentService | undefined;
+if (userRoot && runtimeRoot) {
+  const logs = join(userRoot, "log");
+  mkdirSync(logs, { recursive: true });
+  startupEnvironment = initializeStartupEnvironment({
+    userRoot,
+    env: process.env,
+    log: createLogger(join(logs, "main.log")),
+  });
+}
 if (userRoot && runtimeRoot && process.versions.electron) {
   const electron = require("electron") as typeof import("electron");
   void bootstrapRuntime({
     electron,
     userRoot,
     preloadPath: resolve(runtimeRoot, "preload", "index.js"),
+    startupEnvironment: startupEnvironment as StartupEnvironmentService,
   }).catch((error) => {
     const logs = join(userRoot, "log");
     mkdirSync(logs, { recursive: true });
