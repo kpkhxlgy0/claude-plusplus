@@ -223,6 +223,14 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
         assert.equal(filePath, "Assets/GameEntry.cs");
         return "D:\\workspace\\sgproj\\Assets\\GameEntry.cs";
       },
+      async resolveReference(sessionId, entryId, label, occurrence, visibleCount): Promise<string | null> {
+        assert.equal(sessionId, "local_session");
+        assert.equal(entryId, "resp_file_link");
+        assert.equal(label, "GameEntry.cs");
+        assert.equal(occurrence, 0);
+        assert.equal(visibleCount, 1);
+        return "file:///D:/workspace/sgproj/Assets/GameEntry.cs#L12";
+      },
       async getWorkspaceRoot(sessionId): Promise<string | null> {
         assert.equal(sessionId, "local_session");
         return "D:\\workspace\\sgproj";
@@ -257,6 +265,10 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
   assert.equal(
     await api.claude?.sessions.resolveFile("local_session", "Assets/GameEntry.cs"),
     "D:\\workspace\\sgproj\\Assets\\GameEntry.cs",
+  );
+  assert.equal(
+    await api.claude?.sessions.resolveReference("local_session", "resp_file_link", "GameEntry.cs", 0, 1),
+    "file:///D:/workspace/sgproj/Assets/GameEntry.cs#L12",
   );
   assert.equal(
     await api.claude?.sessions.getWorkspaceRoot("local_session"),

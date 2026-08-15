@@ -174,12 +174,18 @@ function renderIcon(
   const image = document.createElement("img");
   image.setAttribute("alt", "");
   image.style.cssText = "display:none;width:100%;height:100%;object-fit:contain;";
+  image.style.display = "none";
+  image.addEventListener("load", () => {
+    fallback.remove();
+    image.style.display = "block";
+  });
+  image.addEventListener("error", () => {
+    image.remove();
+  });
   avatar.appendChild(image);
   void context.resolveIcon(tweak).then((url) => {
     if (!url || isDisposed()) return;
     image.setAttribute("src", url);
-    image.style.display = "block";
-    fallback.remove();
   }).catch(() => {});
   return avatar;
 }

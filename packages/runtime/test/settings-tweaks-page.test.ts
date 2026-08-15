@@ -7,7 +7,7 @@ import type {
   RegisteredSettingsPage,
   RegisteredSettingsSection,
 } from "../src/settings/types.ts";
-import { settingsFixture } from "./fixtures/settings-dom.ts";
+import { MiniElement, settingsFixture } from "./fixtures/settings-dom.ts";
 
 test("renders disabled and missing-entry Tweaks with the expected actions", () => {
   const fixture = settingsFixture();
@@ -65,8 +65,38 @@ test("shows Configure, Review Release, inline settings, and a resolved icon", as
   await Promise.resolve();
 
   assert.match(root.textContent ?? "", /Configure.*Review Release.*Prompt template value/);
-  assert.equal(root.querySelector("img")?.getAttribute("src"), "data:image/png;base64,fixture");
+  const image = root.querySelector("img") as unknown as MiniElement;
+  assert.equal(image.getAttribute("src"), "data:image/png;base64,fixture");
+  assert.equal(image.style.display, "none");
+  assert.equal(image.parentElement?.textContent, "C");
+
+  image.emit("load", event(image));
+  assert.equal(image.style.display, "block");
+  assert.equal(image.parentElement?.textContent, "");
 });
+
+test("keeps the Tweak icon fallback when the resolved image fails to load", async () => {
+  const fixture = settingsFixture();
+  const root = fixture.environment.document.createElement("div");
+  renderTweaksPage(context(root, [listed("com.example.broken", "Broken Icon", {
+    manifest: { iconUrl: "icon.png" },
+  })]));
+  await Promise.resolve();
+
+  const image = root.querySelector("img") as unknown as MiniElement;
+  assert.equal(image.parentElement?.textContent, "B");
+  image.emit("error", event(image));
+  assert.equal(root.querySelector("img"), null);
+  assert.match(root.textContent ?? "", /^Broken Icon|B/);
+});
+
+function event(target: MiniElement) {
+  return {
+    target,
+    preventDefault() {},
+    stopPropagation() {},
+  };
+}
 
 function context(
   root: HTMLElement,

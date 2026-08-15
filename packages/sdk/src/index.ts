@@ -87,6 +87,13 @@ export interface TweakFs {
 
 export interface ClaudeSessionsApi {
   resolveFile(sessionId: string, filePath: string): Promise<string | null>;
+  resolveReference(
+    sessionId: string,
+    entryId: string,
+    label: string,
+    occurrence: number,
+    visibleCount: number,
+  ): Promise<string | null>;
   getWorkspaceRoot(sessionId: string): Promise<string | null>;
 }
 

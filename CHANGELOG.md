@@ -5,6 +5,21 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.2.3
+
+Release notes: [docs/releases/0.2.3.md](docs/releases/0.2.3.md)
+
+### Added
+
+- Added a permission-scoped session-reference resolver that returns only an unambiguous local file destination from
+  the selected Claude response.
+
+### Fixed
+
+- Preserved source line and column fragments for Claude-native file-reference buttons without exposing transcript
+  contents to Tweaks.
+- Refused transcript reference recovery when its same-label link count differs from the visible Claude response.
+
 ## 0.2.2
 
 Release notes: [docs/releases/0.2.2.md](docs/releases/0.2.2.md)

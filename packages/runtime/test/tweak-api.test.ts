@@ -90,12 +90,35 @@ test("Renderer API only exposes Claude Sessions with its focused permission", as
       if (channel.endsWith("_getSession")) {
         return { cwd: "D:\\workspace\\sgproj" };
       }
+      if (channel.endsWith("_getTranscript")) {
+        return [{
+          type: "assistant",
+          message: {
+            id: "resp-file-link",
+            role: "assistant",
+            content: [{
+              type: "text",
+              text: "[Waiting.prefab:8](file:///D:/workspace/sgproj/Assets/Waiting.prefab#L8)",
+            }],
+          },
+        }];
+      }
       return "D:\\workspace\\sgproj\\Assets\\Waiting.prefab";
     }),
   });
   assert.equal(
     await withPermission.api.claude?.sessions.resolveFile("local-session-id", "Waiting.prefab"),
     "D:\\workspace\\sgproj\\Assets\\Waiting.prefab",
+  );
+  assert.equal(
+    await withPermission.api.claude?.sessions.resolveReference(
+      "local-session-id",
+      "resp-file-link",
+      "Waiting.prefab",
+      0,
+      1,
+    ),
+    "file:///D:/workspace/sgproj/Assets/Waiting.prefab#L8",
   );
   assert.equal(
     await withPermission.api.claude?.sessions.getWorkspaceRoot("local-session-id"),
@@ -106,6 +129,10 @@ test("Renderer API only exposes Claude Sessions with its focused permission", as
       "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_resolveSessionFile",
       "local-session-id",
       "Waiting.prefab",
+    ],
+    [
+      "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_getTranscript",
+      "local-session-id",
     ],
     [
       "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_getSession",
@@ -133,6 +160,10 @@ test("Renderer API revokes retained Claude Sessions references on disposal", asy
 
   await assert.rejects(
     () => sessions.resolveFile("local-session-id", "Waiting.prefab"),
+    /disposed/,
+  );
+  await assert.rejects(
+    () => sessions.resolveReference("local-session-id", "resp-file-link", "Waiting.prefab", 0, 1),
     /disposed/,
   );
   await assert.rejects(

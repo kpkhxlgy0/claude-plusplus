@@ -11,7 +11,7 @@ import { uninstallClaudePlusPlus } from "./commands/uninstall.js";
 import { parseSelfUpdateArguments, selfUpdate } from "./commands/self-update.js";
 import { runWatcherCommand } from "./commands/watcher.js";
 
-const version = "0.2.2";
+const version = "0.2.3";
 
 async function main(argv: string[]): Promise<void> {
   const command = argv[0];
