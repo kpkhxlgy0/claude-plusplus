@@ -1,7 +1,43 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-15T11:04:37Z",
+  "generatedAt": "2026-08-16T15:00:24Z",
   "entries": [
+    {
+      "id": "com.kpk.claude-api-skill-override",
+      "manifest": {
+        "id": "com.kpk.claude-api-skill-override",
+        "name": "Claude API Skill Override",
+        "version": "0.1.0",
+        "githubRepo": "kpkhxlgy0/claude-api-skill-override",
+        "iconUrl": "./icon.png",
+        "description": "Manage the bundled claude-api skill override in Claude Code user settings.",
+        "author": "KPK",
+        "tags": [
+          "skill",
+          "override"
+        ],
+        "minRuntime": "0.2.5",
+        "scope": "both",
+        "main": "index.js",
+        "permissions": [
+          "ipc",
+          "settings",
+          "claude-code-settings"
+        ],
+        "claudeCodeSettings": {
+          "paths": [
+            "skillOverrides.claude-api"
+          ]
+        }
+      },
+      "repo": "kpkhxlgy0/claude-api-skill-override",
+      "approvedCommitSha": "b4318fe9cd1f9b056ab53af7a75139220804b201",
+      "approvedAt": "2026-08-16T15:00:24Z",
+      "approvedBy": "KPK",
+      "platforms": [
+        "win32"
+      ]
+    },
     {
       "id": "com.kpk.gpt-context-window",
       "manifest": {
@@ -41,6 +77,42 @@
         "win32"
       ],
       "releaseUrl": "https://github.com/kpkhxlgy0/gpt-context-window/releases/tag/v0.1.0"
+    },
+    {
+      "id": "com.kpk.subagent-model",
+      "manifest": {
+        "id": "com.kpk.subagent-model",
+        "name": "Subagent Model",
+        "version": "0.1.0",
+        "githubRepo": "kpkhxlgy0/subagent-model",
+        "iconUrl": "./icon.png",
+        "description": "Configure the model used by Claude Code subagents in Claude Desktop.",
+        "author": "KPK",
+        "tags": [
+          "subagent",
+          "model"
+        ],
+        "minRuntime": "0.2.4",
+        "scope": "both",
+        "main": "index.js",
+        "permissions": [
+          "ipc",
+          "settings",
+          "startup-environment"
+        ],
+        "startupEnvironment": {
+          "keys": [
+            "CLAUDE_CODE_SUBAGENT_MODEL"
+          ]
+        }
+      },
+      "repo": "kpkhxlgy0/subagent-model",
+      "approvedCommitSha": "61ebdfcf598dd47d5380052173972bf4e0ed6551",
+      "approvedAt": "2026-08-16T15:00:24Z",
+      "approvedBy": "KPK",
+      "platforms": [
+        "win32"
+      ]
     }
   ]
 }
