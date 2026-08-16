@@ -14,6 +14,11 @@ import {
   initializeStartupEnvironment,
   type StartupEnvironmentService,
 } from "./startup-environment.js";
+import {
+  initializeClaudeCodeSettings,
+  resolveClaudeCodeSettingsFile,
+  type ClaudeCodeSettingsService,
+} from "./claude-code-settings.js";
 
 export interface RuntimeBootstrapDeps {
   electron: typeof import("electron");
@@ -21,6 +26,7 @@ export interface RuntimeBootstrapDeps {
   preloadPath: string;
   sourceRoot?: string;
   startupEnvironment: StartupEnvironmentService;
+  claudeCodeSettings: ClaudeCodeSettingsService;
 }
 
 export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void> {
@@ -49,6 +55,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
       log,
       ipc,
       startupEnvironment: deps.startupEnvironment,
+      claudeCodeSettings: deps.claudeCodeSettings,
     }));
   };
   const manager = new TweakManager({
@@ -246,13 +253,19 @@ function errorMessage(error: unknown): string {
 const userRoot = process.env.CLAUDE_PLUSPLUS_USER_ROOT;
 const runtimeRoot = process.env.CLAUDE_PLUSPLUS_RUNTIME;
 let startupEnvironment: StartupEnvironmentService | undefined;
+let claudeCodeSettings: ClaudeCodeSettingsService | undefined;
 if (userRoot && runtimeRoot) {
   const logs = join(userRoot, "log");
   mkdirSync(logs, { recursive: true });
+  const log = createLogger(join(logs, "main.log"));
   startupEnvironment = initializeStartupEnvironment({
     userRoot,
     env: process.env,
-    log: createLogger(join(logs, "main.log")),
+    log,
+  });
+  claudeCodeSettings = initializeClaudeCodeSettings({
+    settingsFile: resolveClaudeCodeSettingsFile(),
+    log,
   });
 }
 if (userRoot && runtimeRoot && process.versions.electron) {
@@ -262,6 +275,7 @@ if (userRoot && runtimeRoot && process.versions.electron) {
     userRoot,
     preloadPath: resolve(runtimeRoot, "preload", "index.js"),
     startupEnvironment: startupEnvironment as StartupEnvironmentService,
+    claudeCodeSettings: claudeCodeSettings as ClaudeCodeSettingsService,
   }).catch((error) => {
     const logs = join(userRoot, "log");
     mkdirSync(logs, { recursive: true });

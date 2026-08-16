@@ -9,6 +9,7 @@ import {
   createRendererTweakApiLease,
 } from "../src/tweak-api.ts";
 import { initializeStartupEnvironment } from "../src/startup-environment.ts";
+import { initializeClaudeCodeSettings } from "../src/claude-code-settings.ts";
 
 test("Main API persists storage and gates filesystem operations", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-main-api-"));
@@ -20,6 +21,7 @@ test("Main API persists storage and gates filesystem operations", async () => {
       log,
       ipc: mainIpcBridge(),
       startupEnvironment,
+      claudeCodeSettings: codeSettings(root),
     });
     withoutFs.api.storage.set("enabled", true);
     await assert.rejects(() => withoutFs.api.fs.write("state.txt", "bad"), /filesystem permission/);
@@ -31,6 +33,7 @@ test("Main API persists storage and gates filesystem operations", async () => {
       log,
       ipc: mainIpcBridge(),
       startupEnvironment,
+      claudeCodeSettings: codeSettings(root),
     });
     assert.equal(withFs.api.storage.get("enabled"), true);
     await withFs.api.fs.write("state.txt", "ok");
@@ -187,6 +190,7 @@ test("Main API gates startup environment permission and revokes retained referen
       log,
       ipc: mainIpcBridge(),
       startupEnvironment,
+      claudeCodeSettings: codeSettings(root),
     });
     assert.equal(withoutPermission.api.startupEnvironment, undefined);
     await withoutPermission.dispose();
@@ -197,6 +201,7 @@ test("Main API gates startup environment permission and revokes retained referen
       log,
       ipc: mainIpcBridge(),
       startupEnvironment,
+      claudeCodeSettings: codeSettings(root),
     });
     const retained = withPermission.api.startupEnvironment;
     assert.ok(retained);
@@ -215,6 +220,61 @@ test("Main API gates startup environment permission and revokes retained referen
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("Main API gates Claude Code settings permission and revokes retained references", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-code-settings-api-"));
+  try {
+    const startupEnvironment = initializeStartupEnvironment({ userRoot: root, env: {}, log });
+    const service = codeSettings(root);
+    const withoutPermission = createMainTweakApiLease({
+      manifest: manifest([]),
+      userRoot: root,
+      log,
+      ipc: mainIpcBridge(),
+      startupEnvironment,
+      claudeCodeSettings: service,
+    });
+    assert.equal(withoutPermission.api.claudeCodeSettings, undefined);
+    await withoutPermission.dispose();
+
+    const withPermission = createMainTweakApiLease({
+      manifest: codeSettingsManifest(),
+      userRoot: root,
+      log,
+      ipc: mainIpcBridge(),
+      startupEnvironment,
+      claudeCodeSettings: service,
+    });
+    const retained = withPermission.api.claudeCodeSettings;
+    assert.ok(retained);
+    const initial = retained.read("skillOverrides.claude-api");
+    const written = retained.write("skillOverrides.claude-api", "off", initial.revision);
+    assert.equal(written.value, "off");
+
+    await withPermission.dispose();
+
+    assert.throws(() => retained.read("skillOverrides.claude-api"), /disposed/);
+    assert.throws(
+      () => retained.write("skillOverrides.claude-api", "on", written.revision),
+      /disposed/,
+    );
+    assert.throws(() => retained.remove("skillOverrides.claude-api", written.revision), /disposed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Renderer API never exposes Claude Code settings", async () => {
+  const lease = createRendererTweakApiLease({
+    manifest: codeSettingsManifest(),
+    log,
+    storage: localStorageBridge(new Map()),
+    ipc: rendererIpcBridge(async () => undefined),
+  });
+
+  assert.equal(lease.api.claudeCodeSettings, undefined);
+  await lease.dispose();
 });
 
 test("Renderer API never exposes startup environment", async () => {
@@ -247,6 +307,20 @@ function startupManifest(): TweakManifest {
     ...manifest(["startup-environment"]),
     startupEnvironment: { keys: ["EXAMPLE_MAX"] },
   };
+}
+
+function codeSettingsManifest(): TweakManifest {
+  return {
+    ...manifest(["claude-code-settings"]),
+    claudeCodeSettings: { paths: ["skillOverrides.claude-api"] },
+  };
+}
+
+function codeSettings(root: string) {
+  return initializeClaudeCodeSettings({
+    settingsFile: join(root, ".claude", "settings.json"),
+    log,
+  });
 }
 
 function localStorageBridge(values: Map<string, string>) {

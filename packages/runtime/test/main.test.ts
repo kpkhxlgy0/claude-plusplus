@@ -12,6 +12,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { bootstrapRuntime } from "../src/main.ts";
 import { initializeStartupEnvironment } from "../src/startup-environment.ts";
+import { initializeClaudeCodeSettings } from "../src/claude-code-settings.ts";
 
 test("registers every Settings management handler once", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-handlers-"));
@@ -29,6 +30,7 @@ test("registers every Settings management handler once", async () => {
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
 
     assert.deepEqual([...handlers.keys()].filter((name) => name.startsWith("claudepp:")).sort(), [
@@ -73,6 +75,7 @@ test("registers the Claude++ preload additively with modern Electron", async () 
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
 
     assert.deepEqual(registrations, [{
@@ -101,6 +104,7 @@ test("preserves existing preloads when the modern API is unavailable", async () 
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
 
     assert.deepEqual(preloads, ["C:\\official\\preload.js", "C:\\runtime\\preload.js"]);
@@ -124,6 +128,7 @@ test("registers the preload on Sessions created after bootstrap", async () => {
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
     sessionCreated?.(fakeSession((options) => {
       laterRegistrations.push(options);
@@ -163,6 +168,7 @@ test("registers the default Session only once when session-created fires during 
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
 
     assert.equal(registrationCount, 1);
@@ -195,6 +201,7 @@ test("registers Renderer preload and CSP compatibility once per Session", async 
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
     sessionCreated?.(laterSession);
     sessionCreated?.(laterSession);
@@ -232,6 +239,7 @@ test("registers the default Session from the ready event before the official win
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
 
     assert.equal(registrationWasEarly, true);
@@ -256,6 +264,7 @@ test("records Renderer sandbox settings and preload failures from created web co
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
     webContentsCreated?.(undefined, {
       id: 17,
@@ -301,6 +310,7 @@ test("serves the full Tweak catalog and validated Renderer source through separa
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
     const catalog = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{
       manifest: { id: string };
@@ -370,6 +380,7 @@ test("reload evaluates changed main Tweak source installed through a junction", 
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
     const channel = "claudepp:com.example.junction:version";
     assert.equal(await handlers.get(channel)?.({}), 1);
@@ -415,6 +426,7 @@ test("proxies Renderer filesystem access only for a declared Tweak", async () =>
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
     const fsHandler = handlers.get("claudepp:tweak-fs");
     assert.ok(fsHandler);
@@ -473,6 +485,7 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
       userRoot: root,
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
     });
     const payload = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{ enabled: boolean }>;
 
@@ -498,6 +511,13 @@ function startupEnvironment(root: string) {
   return initializeStartupEnvironment({
     userRoot: root,
     env: {},
+    log: { debug() {}, info() {}, warn() {}, error() {} },
+  });
+}
+
+function codeSettings(root: string) {
+  return initializeClaudeCodeSettings({
+    settingsFile: join(root, ".claude", "settings.json"),
     log: { debug() {}, info() {}, warn() {}, error() {} },
   });
 }

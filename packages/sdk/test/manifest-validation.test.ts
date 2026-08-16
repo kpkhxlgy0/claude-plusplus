@@ -5,6 +5,7 @@ import {
   VALID_TWEAK_PERMISSIONS,
   validateTweakManifest,
   type ClaudeApi,
+  type ClaudeCodeSettingsApi,
   type SettingsApi,
   type SettingsHandle,
   type SettingsPage,
@@ -124,6 +125,7 @@ test("exposes the focused Claude Sessions permission and rejects former private 
     "settings",
     "claude-sessions",
     "startup-environment",
+    "claude-code-settings",
   ]);
 
   for (const permission of [
@@ -204,6 +206,96 @@ test("rejects invalid, duplicate, empty, and Renderer-only startup environment d
 
     assert.equal(result.ok, false);
     assert.equal(result.errors.some((issue) => issue.path.startsWith("startupEnvironment")), true);
+  }
+});
+
+test("accepts a Main-capable Claude Code settings declaration", () => {
+  const result = validateTweakManifest({
+    id: "com.example.code-settings",
+    name: "Code settings",
+    version: "0.1.0",
+    githubRepo: "example/code-settings",
+    scope: "both",
+    permissions: ["claude-code-settings"],
+    claudeCodeSettings: { paths: ["skillOverrides.claude-api"] },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+});
+
+test("requires Claude Code settings permission and declaration together", () => {
+  for (const manifest of [
+    { permissions: ["claude-code-settings"] },
+    { claudeCodeSettings: { paths: ["skillOverrides.claude-api"] } },
+  ]) {
+    const result = validateTweakManifest({
+      id: "com.example.invalid-code-settings",
+      name: "Invalid Code settings",
+      version: "0.1.0",
+      githubRepo: "example/invalid-code-settings",
+      scope: "both",
+      ...manifest,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.errors.some((issue) => issue.path.startsWith("claudeCodeSettings")), true);
+  }
+});
+
+test("rejects unsafe, duplicate, overlapping, empty, and Renderer-only settings paths", () => {
+  for (const declaration of [
+    { paths: [] },
+    { paths: ["skillOverrides..claude-api"] },
+    { paths: ["skillOverrides.__proto__"] },
+    { paths: ["skillOverrides.claude-api", "skillOverrides.claude-api"] },
+    { paths: ["skillOverrides", "skillOverrides.claude-api"] },
+    { paths: Array.from({ length: 65 }, (_, index) => `settings.path${index}`) },
+    { paths: ["a".repeat(257)] },
+    { paths: [123] },
+  ]) {
+    const result = validateTweakManifest({
+      id: "com.example.invalid-code-settings",
+      name: "Invalid Code settings",
+      version: "0.1.0",
+      githubRepo: "example/invalid-code-settings",
+      scope: "both",
+      permissions: ["claude-code-settings"],
+      claudeCodeSettings: declaration,
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(declaration));
+    assert.equal(result.errors.some((issue) => issue.path.startsWith("claudeCodeSettings")), true);
+  }
+
+  const renderer = validateTweakManifest({
+    id: "com.example.renderer-code-settings",
+    name: "Renderer Code settings",
+    version: "0.1.0",
+    githubRepo: "example/renderer-code-settings",
+    scope: "renderer",
+    permissions: ["claude-code-settings"],
+    claudeCodeSettings: { paths: ["skillOverrides.claude-api"] },
+  });
+  assert.equal(renderer.ok, false);
+  assert.equal(renderer.errors.some((issue) => issue.path === "claudeCodeSettings"), true);
+});
+
+test("accepts Claude Code settings declarations at documented size boundaries", () => {
+  for (const paths of [
+    Array.from({ length: 64 }, (_, index) => `settings.path${index}`),
+    ["a".repeat(256)],
+  ]) {
+    const result = validateTweakManifest({
+      id: "com.example.boundary-code-settings",
+      name: "Boundary Code settings",
+      version: "0.1.0",
+      githubRepo: "example/boundary-code-settings",
+      scope: "main",
+      permissions: ["claude-code-settings"],
+      claudeCodeSettings: { paths },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
   }
 });
 
@@ -319,6 +411,23 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
       relaunched = true;
     },
   };
+  const claudeCodeSettings: ClaudeCodeSettingsApi = {
+    read(path) {
+      assert.equal(path, "skillOverrides.claude-api");
+      return { exists: false, revision: "missing:v1" };
+    },
+    write(path, value, expectedRevision) {
+      assert.equal(path, "skillOverrides.claude-api");
+      assert.equal(value, "off");
+      assert.equal(expectedRevision, "missing:v1");
+      return { exists: true, value, revision: "sha256:written" };
+    },
+    remove(path, expectedRevision) {
+      assert.equal(path, "skillOverrides.claude-api");
+      assert.equal(expectedRevision, "sha256:written");
+      return { exists: false, revision: "sha256:removed" };
+    },
+  };
   const api: TweakApi = {
     manifest: {
       id: "com.example.complete-tweak",
@@ -344,6 +453,7 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
     process: "main",
     claude: undefined,
     startupEnvironment,
+    claudeCodeSettings,
   };
 
   storage.set("enabled", true);
@@ -366,4 +476,19 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
   assert.equal(mainApi.startupEnvironment?.save(startupConfig), startupStatus);
   mainApi.startupEnvironment?.relaunch();
   assert.equal(relaunched, true);
+  const codeSettingsInitial = mainApi.claudeCodeSettings?.read("skillOverrides.claude-api");
+  assert.deepEqual(codeSettingsInitial, { exists: false, revision: "missing:v1" });
+  const codeSettingsWritten = mainApi.claudeCodeSettings?.write(
+    "skillOverrides.claude-api",
+    "off",
+    codeSettingsInitial?.revision ?? "",
+  );
+  assert.equal(codeSettingsWritten?.value, "off");
+  assert.equal(
+    mainApi.claudeCodeSettings?.remove(
+      "skillOverrides.claude-api",
+      codeSettingsWritten?.revision ?? "",
+    ).exists,
+    false,
+  );
 });

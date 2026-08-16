@@ -7,6 +7,7 @@ export const VALID_TWEAK_PERMISSIONS = [
   "settings",
   "claude-sessions",
   "startup-environment",
+  "claude-code-settings",
 ] as const;
 
 export type TweakScope = (typeof VALID_TWEAK_SCOPES)[number];
@@ -34,6 +35,34 @@ export interface StartupEnvironmentApi {
   relaunch(): void;
 }
 
+export type ClaudeCodeSettingsJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | ClaudeCodeSettingsJsonValue[]
+  | { [key: string]: ClaudeCodeSettingsJsonValue };
+
+export interface ClaudeCodeSettingsDeclaration {
+  paths: string[];
+}
+
+export interface ClaudeCodeSettingsRead {
+  exists: boolean;
+  value?: ClaudeCodeSettingsJsonValue;
+  revision: string;
+}
+
+export interface ClaudeCodeSettingsApi {
+  read(path: string): ClaudeCodeSettingsRead;
+  write(
+    path: string,
+    value: ClaudeCodeSettingsJsonValue,
+    expectedRevision: string,
+  ): ClaudeCodeSettingsRead;
+  remove(path: string, expectedRevision: string): ClaudeCodeSettingsRead;
+}
+
 export interface TweakManifest {
   id: string;
   name: string;
@@ -49,6 +78,7 @@ export interface TweakManifest {
   main?: string;
   permissions?: TweakPermission[];
   startupEnvironment?: StartupEnvironmentDeclaration;
+  claudeCodeSettings?: ClaudeCodeSettingsDeclaration;
 }
 
 export interface TweakAuthor {
@@ -135,6 +165,7 @@ export interface TweakApi {
   fs: TweakFs;
   claude?: ClaudeApi;
   startupEnvironment?: StartupEnvironmentApi;
+  claudeCodeSettings?: ClaudeCodeSettingsApi;
 }
 
 export interface Tweak {
@@ -282,7 +313,91 @@ export function validateTweakManifest(manifest: unknown): TweakManifestValidatio
     }
   }
 
+  const hasClaudeCodeSettingsPermission = Array.isArray(manifest.permissions) &&
+    manifest.permissions.includes("claude-code-settings");
+  const hasClaudeCodeSettingsDeclaration = manifest.claudeCodeSettings !== undefined;
+  if (hasClaudeCodeSettingsPermission !== hasClaudeCodeSettingsDeclaration) {
+    errors.push({
+      path: "claudeCodeSettings",
+      message: "claude-code-settings permission and claudeCodeSettings declaration must be provided together",
+    });
+  }
+  if (hasClaudeCodeSettingsDeclaration) {
+    if (!isRecord(manifest.claudeCodeSettings)) {
+      errors.push({ path: "claudeCodeSettings", message: "claudeCodeSettings must be an object" });
+    } else {
+      const paths = manifest.claudeCodeSettings.paths;
+      if (!Array.isArray(paths) || paths.length === 0) {
+        errors.push({
+          path: "claudeCodeSettings.paths",
+          message: "claudeCodeSettings.paths must be a non-empty array",
+        });
+      } else if (paths.length > 64) {
+        errors.push({
+          path: "claudeCodeSettings.paths",
+          message: "claudeCodeSettings.paths may contain at most 64 paths",
+        });
+      } else {
+        const validPaths: Array<{ path: string; index: number; segments: string[] }> = [];
+        const seen = new Set<string>();
+        paths.forEach((path, index) => {
+          const issue = validateClaudeCodeSettingsPath(path);
+          if (issue) {
+            errors.push({ path: `claudeCodeSettings.paths[${index}]`, message: issue });
+            return;
+          }
+          if (seen.has(path as string)) {
+            errors.push({
+              path: `claudeCodeSettings.paths[${index}]`,
+              message: "Claude Code settings paths must be unique",
+            });
+            return;
+          }
+          seen.add(path as string);
+          validPaths.push({ path: path as string, index, segments: (path as string).split(".") });
+        });
+        for (let leftIndex = 0; leftIndex < validPaths.length; leftIndex += 1) {
+          for (let rightIndex = leftIndex + 1; rightIndex < validPaths.length; rightIndex += 1) {
+            const left = validPaths[leftIndex];
+            const right = validPaths[rightIndex];
+            const shorter = left.segments.length <= right.segments.length ? left : right;
+            const longer = shorter === left ? right : left;
+            const overlaps = shorter.segments.every(
+              (segment, segmentIndex) => longer.segments[segmentIndex] === segment,
+            );
+            if (overlaps) {
+              errors.push({
+                path: `claudeCodeSettings.paths[${longer.index}]`,
+                message: `Claude Code settings paths must not overlap (${shorter.path})`,
+              });
+            }
+          }
+        }
+      }
+    }
+    if (manifest.scope === "renderer") {
+      errors.push({
+        path: "claudeCodeSettings",
+        message: "Claude Code settings access requires a Main-capable Tweak scope",
+      });
+    }
+  }
+
   return { ok: errors.length === 0, errors, warnings };
+}
+
+function validateClaudeCodeSettingsPath(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256) {
+    return "Claude Code settings path must be a non-empty string of at most 256 characters";
+  }
+  if (!/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/.test(value)) {
+    return "Claude Code settings path must contain dot-separated identifier-like segments";
+  }
+  const unsafe = new Set(["__proto__", "prototype", "constructor"]);
+  if (value.split(".").some((segment) => unsafe.has(segment))) {
+    return "Claude Code settings path contains an unsafe segment";
+  }
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

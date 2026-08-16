@@ -59,7 +59,8 @@ automatic refresh cannot be enabled until the Watcher is present.
 
 Claude++ adds Config, Tweaks, and Tweak Store pages to Claude Desktop Settings. The public Store starts empty and only
 accepts reviewed Tweaks pinned to an approved full Git commit. Private workflow Tweaks must be distributed and
-installed separately.
+installed separately. See [Tweak authoring](docs/tweak-authoring.md) for manifest and API guidance, including the
+Main-only, exact-path Claude Code settings capability.
 
 ## Installation boundary
 

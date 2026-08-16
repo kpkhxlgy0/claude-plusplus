@@ -16,6 +16,7 @@ import {
 } from "./tweak-ipc.js";
 import type { TweakApiLease } from "./tweak-lifecycle.js";
 import type { StartupEnvironmentService } from "./startup-environment.js";
+import type { ClaudeCodeSettingsService } from "./claude-code-settings.js";
 
 export interface MainTweakApiOptions {
   manifest: TweakManifest;
@@ -23,6 +24,7 @@ export interface MainTweakApiOptions {
   log: TweakLogger;
   ipc: MainTweakIpcBridge;
   startupEnvironment: StartupEnvironmentService;
+  claudeCodeSettings: ClaudeCodeSettingsService;
 }
 
 export interface RendererStorageBridge {
@@ -48,6 +50,9 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
   const startupEnvironment = options.manifest.permissions?.includes("startup-environment")
     ? options.startupEnvironment.createApiLease(options.manifest)
     : undefined;
+  const claudeCodeSettings = options.manifest.permissions?.includes("claude-code-settings")
+    ? options.claudeCodeSettings.createApiLease(options.manifest)
+    : undefined;
   return {
     api: {
       manifest: options.manifest,
@@ -57,8 +62,10 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
       ipc: ipc.api,
       fs,
       ...(startupEnvironment ? { startupEnvironment: startupEnvironment.api } : {}),
+      ...(claudeCodeSettings ? { claudeCodeSettings: claudeCodeSettings.api } : {}),
     },
     async dispose(): Promise<void> {
+      claudeCodeSettings?.dispose();
       startupEnvironment?.dispose();
       try {
         await ipc.dispose();

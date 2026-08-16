@@ -5,6 +5,20 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.2.5
+
+Release notes: [docs/releases/0.2.5.md](docs/releases/0.2.5.md)
+
+### Added
+
+- Added a Main-only, permission-gated `claude-code-settings` Tweak API restricted to exact manifest-declared paths.
+- Added revision-guarded atomic read, write, and remove operations for Claude Code user settings.
+
+### Security
+
+- Rejected malformed settings, unsafe paths and values, incompatible intermediate structures, undeclared access, and stale revisions without replacing the target file.
+- Revoked retained settings API references when their Main Tweak lease is disposed and documented the shared Desktop-plus-terminal scope of user settings.
+
 ## 0.2.4
 
 Release notes: [docs/releases/0.2.4.md](docs/releases/0.2.4.md)

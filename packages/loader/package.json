@@ -1,6 +1,6 @@
 {
   "name": "@claude-plusplus/loader",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "description": "Minimal bootstrap injected into the managed Claude app.asar",
   "main": "loader.cjs",
