@@ -98,6 +98,67 @@ test("rejects a non-object tool input schema", async () => {
   );
 });
 
+test("preserves __proto__ as an own schema key", async () => {
+  const registry = new TweakMcpRegistry();
+  const lease = registry.createApiLease(manifest("com.example.title"));
+  const inputSchema = JSON.parse(
+    '{"type":"object","properties":{"__proto__":{"type":"string"}}}',
+  ) as Record<string, unknown>;
+
+  await lease.api.registerServer(server("claudepp_title", "v1", [
+    tool("set", "v1", inputSchema),
+  ]));
+
+  const snapshotSchema = registry.snapshot()[0].tools[0].inputSchema;
+  const properties = snapshotSchema.properties as Record<string, unknown>;
+  assert.equal(Object.hasOwn(properties, "__proto__"), true);
+});
+
+test("includes __proto__ schema keys in the structural fingerprint", async () => {
+  const registry = new TweakMcpRegistry();
+  const first = registry.createApiLease(manifest("com.example.title"));
+  const inputSchema = JSON.parse(
+    '{"type":"object","properties":{"__proto__":{"type":"string"}}}',
+  ) as Record<string, unknown>;
+  await first.api.registerServer(server("claudepp_title", "old", [
+    tool("set", "old", inputSchema),
+  ]));
+  const replacement = registry.createApiLease(manifest("com.example.title"));
+
+  await assert.rejects(
+    () => replacement.api.registerServer(server("claudepp_title", "new", [
+      tool("set", "new", { type: "object", properties: {} }),
+    ])),
+    /structural definition/,
+  );
+});
+
+test("rejects a Date tool input schema", async () => {
+  const registry = new TweakMcpRegistry();
+  const lease = registry.createApiLease(manifest("com.example.title"));
+  const inputSchema = new Date(0) as unknown as Record<string, unknown>;
+
+  await assert.rejects(
+    () => lease.api.registerServer(server("claudepp_title", "v1", [
+      tool("set", "v1", inputSchema),
+    ])),
+    /plain JSON object/i,
+  );
+});
+
+test("rejects a Map tool input schema", async () => {
+  const registry = new TweakMcpRegistry();
+  const lease = registry.createApiLease(manifest("com.example.title"));
+  const inputSchema = new Map<string, unknown>() as unknown as Record<string, unknown>;
+
+  await assert.rejects(
+    () => lease.api.registerServer(server("claudepp_title", "v1", [
+      tool("set", "v1", inputSchema),
+    ])),
+    /plain JSON object/i,
+  );
+});
+
 test("rejects an active server name owned by another Tweak", async () => {
   const registry = new TweakMcpRegistry();
   const first = registry.createApiLease(manifest("com.example.first"));
@@ -192,6 +253,177 @@ test("retained server objects cannot replace handlers without registration", asy
     ),
     { content: [{ type: "text", text: "registered:A:caller" }] },
   );
+});
+
+test("mutating a snapshot cannot corrupt later registry snapshots", async () => {
+  const registry = new TweakMcpRegistry();
+  const lease = registry.createApiLease(manifest("com.example.title"));
+  await lease.api.registerServer(server("claudepp_title", "registered"));
+  const first = registry.snapshot();
+  const mutable = first[0] as unknown as {
+    name: string;
+    tools: Array<{
+      name: string;
+      inputSchema: { properties: { title: { type: string } } };
+    }>;
+  };
+
+  try {
+    mutable.name = "claudepp_corrupted";
+  } catch {}
+  try {
+    mutable.tools[0].name = "corrupted";
+  } catch {}
+  try {
+    mutable.tools[0].inputSchema.properties.title.type = "number";
+  } catch {}
+
+  const next = registry.snapshot();
+  assert.equal(next[0].name, "claudepp_title");
+  assert.equal(next[0].tools[0].name, "set");
+  assert.equal(
+    (next[0].tools[0].inputSchema.properties as { title: { type: string } }).title.type,
+    "string",
+  );
+});
+
+test("one subscriber cannot corrupt a change observed by later subscribers", async () => {
+  const registry = new TweakMcpRegistry();
+  const observed: Array<{ names: string[]; managedNames: readonly string[] }> = [];
+  registry.subscribe((change) => {
+    const mutable = change as unknown as {
+      snapshot: Array<{
+        name: string;
+        tools: Array<{ inputSchema: { properties: { title: { type: string } } } }>;
+      }>;
+      managedNames: string[];
+    };
+    try {
+      mutable.snapshot[0].name = "claudepp_corrupted";
+    } catch {}
+    try {
+      mutable.snapshot[0].tools[0].inputSchema.properties.title.type = "number";
+    } catch {}
+    try {
+      mutable.managedNames[0] = "claudepp_corrupted";
+    } catch {}
+  });
+  registry.subscribe((change) => {
+    observed.push({
+      names: change.snapshot.map((entry) => entry.name),
+      managedNames: change.managedNames,
+    });
+  });
+  const lease = registry.createApiLease(manifest("com.example.title"));
+
+  await lease.api.registerServer(server("claudepp_title", "registered"));
+
+  assert.deepEqual(observed, [{
+    names: ["claudepp_title"],
+    managedNames: ["claudepp_title"],
+  }]);
+  const next = registry.snapshot();
+  assert.equal(next[0].name, "claudepp_title");
+  assert.equal(
+    (next[0].tools[0].inputSchema.properties as { title: { type: string } }).title.type,
+    "string",
+  );
+});
+
+test("a throwing subscriber does not reject server registration", async () => {
+  const reported: unknown[] = [];
+  const registry = new TweakMcpRegistry({
+    onSubscriberError(error) {
+      reported.push(error);
+    },
+  });
+  const listenerError = new Error("register listener failed");
+  const observed: string[][] = [];
+  registry.subscribe(() => {
+    throw listenerError;
+  });
+  registry.subscribe((change) => {
+    observed.push(change.snapshot.map((entry) => entry.name));
+  });
+  const lease = registry.createApiLease(manifest("com.example.title"));
+
+  const registration = await lease.api.registerServer(server("claudepp_title", "registered"));
+
+  assert.equal(typeof registration.unregister, "function");
+  assert.deepEqual(observed, [["claudepp_title"]]);
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0], listenerError);
+  assert.deepEqual(registry.snapshot().map((entry) => entry.name), ["claudepp_title"]);
+});
+
+test("a throwing subscriber does not reject server unregistration", async () => {
+  const reported: unknown[] = [];
+  const registry = new TweakMcpRegistry({
+    onSubscriberError(error) {
+      reported.push(error);
+    },
+  });
+  const lease = registry.createApiLease(manifest("com.example.title"));
+  const registration = await lease.api.registerServer(server("claudepp_title", "registered"));
+  const listenerError = new Error("unregister listener failed");
+  let laterSubscriberCalls = 0;
+  registry.subscribe(() => {
+    throw listenerError;
+  });
+  registry.subscribe(() => {
+    laterSubscriberCalls += 1;
+  });
+
+  await registration.unregister();
+
+  assert.equal(laterSubscriberCalls, 1);
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0], listenerError);
+  assert.deepEqual(registry.snapshot(), []);
+});
+
+test("a throwing subscriber does not reject API lease disposal", async () => {
+  const reported: unknown[] = [];
+  const registry = new TweakMcpRegistry({
+    onSubscriberError(error) {
+      reported.push(error);
+    },
+  });
+  const lease = registry.createApiLease(manifest("com.example.title"));
+  await lease.api.registerServer(server("claudepp_title", "registered"));
+  const listenerError = new Error("dispose listener failed");
+  let laterSubscriberCalls = 0;
+  registry.subscribe(() => {
+    throw listenerError;
+  });
+  registry.subscribe(() => {
+    laterSubscriberCalls += 1;
+  });
+
+  await lease.dispose();
+  await lease.dispose();
+
+  assert.equal(laterSubscriberCalls, 1);
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0], listenerError);
+  assert.deepEqual(registry.snapshot(), []);
+});
+
+test("a throwing subscriber error channel does not reject registration", async () => {
+  const registry = new TweakMcpRegistry({
+    onSubscriberError() {
+      throw new Error("reporter failed");
+    },
+  });
+  registry.subscribe(() => {
+    throw new Error("listener failed");
+  });
+  const lease = registry.createApiLease(manifest("com.example.title"));
+
+  const registration = await lease.api.registerServer(server("claudepp_title", "registered"));
+
+  assert.equal(typeof registration.unregister, "function");
+  assert.deepEqual(registry.snapshot().map((entry) => entry.name), ["claudepp_title"]);
 });
 
 test("change notifications include the active snapshot and every managed name", async () => {

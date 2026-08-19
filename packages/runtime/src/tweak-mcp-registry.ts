@@ -7,27 +7,43 @@ import type {
   TweakMcpToolContext,
 } from "@claude-plusplus/sdk";
 
+export type RegisteredTweakMcpJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly RegisteredTweakMcpJsonValue[]
+  | RegisteredTweakMcpJsonObject;
+
+export interface RegisteredTweakMcpJsonObject {
+  readonly [key: string]: RegisteredTweakMcpJsonValue;
+}
+
 export interface RegisteredTweakMcpTool {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: RegisteredTweakMcpJsonObject;
 }
 
 export interface RegisteredTweakMcpServer {
-  tweakId: string;
-  name: string;
-  version?: string;
-  tools: readonly RegisteredTweakMcpTool[];
+  readonly tweakId: string;
+  readonly name: string;
+  readonly version?: string;
+  readonly tools: readonly RegisteredTweakMcpTool[];
 }
 
 export interface TweakMcpRegistryChange {
-  snapshot: readonly RegisteredTweakMcpServer[];
-  managedNames: readonly string[];
+  readonly snapshot: readonly RegisteredTweakMcpServer[];
+  readonly managedNames: readonly string[];
 }
 
 export interface TweakMcpApiLease {
-  api: TweakMcpApi;
+  readonly api: TweakMcpApi;
   dispose(): Promise<void>;
+}
+
+export interface TweakMcpRegistryOptions {
+  readonly onSubscriberError?: (error: unknown) => void;
 }
 
 interface LeaseState {
@@ -67,6 +83,11 @@ export class TweakMcpRegistry {
   private readonly fingerprints = new Map<string, string>();
   private readonly managedNames = new Set<string>();
   private readonly subscribers = new Set<RegistrySubscriber>();
+  private readonly onSubscriberError?: (error: unknown) => void;
+
+  constructor(options: TweakMcpRegistryOptions = {}) {
+    this.onSubscriberError = options.onSubscriberError;
+  }
 
   createApiLease(manifest: Readonly<TweakManifest>): TweakMcpApiLease {
     const lease: LeaseState = {
@@ -100,11 +121,11 @@ export class TweakMcpRegistry {
     };
   }
 
-  snapshot(): RegisteredTweakMcpServer[] {
-    return [...this.activeServers.values()]
+  snapshot(): readonly RegisteredTweakMcpServer[] {
+    return Object.freeze([...this.activeServers.values()]
       .filter((entry) => entry.lease.active)
       .map((entry) => entry.definition)
-      .sort((left, right) => left.name.localeCompare(right.name));
+      .sort((left, right) => left.name.localeCompare(right.name)));
   }
 
   async invoke(
@@ -189,11 +210,29 @@ export class TweakMcpRegistry {
   private emitChange(): void {
     const change: TweakMcpRegistryChange = {
       snapshot: this.snapshot(),
-      managedNames: [...this.managedNames].sort(),
+      managedNames: Object.freeze([...this.managedNames].sort()),
     };
+    const immutableChange = Object.freeze(change);
     for (const subscriber of this.subscribers) {
-      subscriber(change);
+      try {
+        subscriber(immutableChange);
+      } catch (error) {
+        this.reportSubscriberError(error);
+      }
     }
+  }
+
+  private reportSubscriberError(error: unknown): void {
+    if (this.onSubscriberError) {
+      try {
+        this.onSubscriberError(error);
+      } catch {}
+      return;
+    }
+
+    try {
+      console.error("[Claude++] Tweak MCP registry subscriber failed", error);
+    } catch {}
   }
 }
 
@@ -235,11 +274,11 @@ function validateServer(tweakId: string, server: TweakMcpServer): ValidatedServe
     }
 
     names.add(tool.name);
-    definitions.push({
+    definitions.push(Object.freeze({
       name: tool.name,
       description: tool.description,
       inputSchema: canonicalizeJsonObject(tool.inputSchema, `MCP tool "${tool.name}" input schema`),
-    });
+    }));
     handlers.set(tool.name, {
       name: tool.name,
       description: tool.description,
@@ -248,13 +287,14 @@ function validateServer(tweakId: string, server: TweakMcpServer): ValidatedServe
     });
   }
   definitions.sort((left, right) => left.name.localeCompare(right.name));
+  const immutableDefinitions = Object.freeze(definitions);
 
-  const definition: RegisteredTweakMcpServer = {
+  const definition: RegisteredTweakMcpServer = Object.freeze({
     tweakId,
     name: server.name,
     ...(server.version === undefined ? {} : { version: server.version }),
-    tools: definitions,
-  };
+    tools: immutableDefinitions,
+  });
   const fingerprint = JSON.stringify({
     name: definition.name,
     version: definition.version ?? null,
@@ -266,8 +306,8 @@ function validateServer(tweakId: string, server: TweakMcpServer): ValidatedServe
 function canonicalizeJsonObject(
   value: Record<string, unknown>,
   label: string,
-): Record<string, unknown> {
-  return canonicalizeJson(value, label, new Set()) as Record<string, unknown>;
+): RegisteredTweakMcpJsonObject {
+  return canonicalizeJson(value, label, new Set()) as RegisteredTweakMcpJsonObject;
 }
 
 function canonicalizeJson(value: unknown, label: string, parents: Set<object>): unknown {
@@ -283,16 +323,24 @@ function canonicalizeJson(value: unknown, label: string, parents: Set<object>): 
   parents.add(value);
   try {
     if (Array.isArray(value)) {
-      return value.map((item) => canonicalizeJson(item, label, parents));
+      return Object.freeze(value.map((item) => canonicalizeJson(item, label, parents)));
     }
-    const result: Record<string, unknown> = {};
+    if (!isPlainJsonObject(value)) {
+      throw new Error(`${label} must contain only plain JSON objects`);
+    }
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(value).sort()) {
-      result[key] = canonicalizeJson((value as Record<string, unknown>)[key], label, parents);
+      result[key] = canonicalizeJson(value[key], label, parents);
     }
-    return result;
+    return Object.freeze(result);
   } finally {
     parents.delete(value);
   }
+}
+
+function isPlainJsonObject(value: object): value is Record<string, unknown> {
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  return prototype === Object.prototype || prototype === null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
