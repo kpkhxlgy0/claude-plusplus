@@ -350,6 +350,85 @@ test("updates the current session title through the explicit-ID manager path", a
   assert.deepEqual(fixture.getSessionReads, ["current-session-id", "current-session-id"]);
 });
 
+test("resolves a Claude CLI session UUID to the Desktop session key before updating", async (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.service.dispose());
+  fixture.addSession("local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", {
+    cliSessionId: "11111111-2222-4333-8444-555555555555",
+    query: null,
+    isRunning: false,
+    activeMcpServers: {},
+    title: "Old title",
+  });
+  const lease = fixture.service.createSessionTitlesApiLease();
+
+  const result = await lease.api.setTitle(
+    "11111111-2222-4333-8444-555555555555",
+    "New title",
+  );
+
+  assert.deepEqual(result, {
+    sessionId: "11111111-2222-4333-8444-555555555555",
+    title: "New title",
+  });
+  assert.deepEqual(fixture.updates, [[
+    "local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    { title: "New title", titleSource: "user" },
+  ]]);
+  assert.deepEqual(fixture.getSessionReads, [
+    "11111111-2222-4333-8444-555555555555",
+    "local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  ]);
+});
+
+test("rejects a CLI session UUID that maps to multiple Desktop sessions", async (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.service.dispose());
+  for (const sessionId of ["local_first", "local_second"]) {
+    fixture.addSession(sessionId, {
+      cliSessionId: "11111111-2222-4333-8444-555555555555",
+      query: null,
+      isRunning: false,
+      activeMcpServers: {},
+      title: "Old title",
+    });
+  }
+  const lease = fixture.service.createSessionTitlesApiLease();
+
+  await assert.rejects(
+    () => lease.api.setTitle("11111111-2222-4333-8444-555555555555", "New title"),
+    /multiple Desktop sessions/i,
+  );
+  assert.deepEqual(fixture.updates, []);
+});
+
+test("prefers an exact Desktop session key over a conflicting CLI session alias", async (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.service.dispose());
+  fixture.addSession("11111111-2222-4333-8444-555555555555", {
+    query: null,
+    isRunning: false,
+    activeMcpServers: {},
+    title: "Exact old title",
+  });
+  fixture.addSession("local_alias", {
+    cliSessionId: "11111111-2222-4333-8444-555555555555",
+    query: null,
+    isRunning: false,
+    activeMcpServers: {},
+    title: "Alias old title",
+  });
+  const lease = fixture.service.createSessionTitlesApiLease();
+
+  await lease.api.setTitle("11111111-2222-4333-8444-555555555555", "New title");
+
+  assert.deepEqual(fixture.updates, [[
+    "11111111-2222-4333-8444-555555555555",
+    { title: "New title", titleSource: "user" },
+  ]]);
+});
+
 test("updates another session through the same explicit-ID manager path", async (t) => {
   const fixture = createFixture();
   t.after(() => fixture.service.dispose());
@@ -487,6 +566,7 @@ interface CreatedServerOptions {
 
 interface FakeSession {
   sessionId: string;
+  cliSessionId?: string;
   query: unknown | null;
   isRunning: boolean;
   activeMcpServers: Record<string, unknown>;

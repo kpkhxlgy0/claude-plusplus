@@ -9,7 +9,8 @@ This document describes the focused Main Tweak capabilities added in Claude++ 0.
 Claude++ 0.2.6 adds two Main-only permissions:
 
 - `mcp` exposes `api.mcp.registerServer(...)` for handler-backed, in-process MCP servers.
-- `claude-session-title-write` exposes `api.claude.sessionTitles.setTitle(sessionId, title)` for an explicit Claude Desktop session ID.
+- `claude-session-title-write` exposes `api.claude.sessionTitles.setTitle(sessionId, title)` for an explicit Claude
+  Desktop manager key or the Claude Code CLI session UUID exposed inside the conversation.
 
 Renderer-only manifests cannot request either permission, and Renderer API leases never expose either capability. A
 Main-only manifest requesting both capabilities looks like this:
@@ -93,9 +94,10 @@ descriptions, and input schemas cannot change after unregister, disable, or hot 
 replace handler functions only when that complete structure is identical. Existing SDK handlers dynamically resolve
 the current active handler, so do not retain or call a handler from a previous Tweak lease.
 
-`setTitle` trims both arguments, accepts only a known Desktop session, limits the title to 200 UTF-16 code units, uses
-Desktop's user-title update path, and verifies an exact read-back before resolving. It can update the current session
-or another session known to the same Desktop process. The MCP injection itself writes no `~/.claude.json`, project
+`setTitle` trims both arguments, accepts a direct Desktop manager key or an exact unique `cliSessionId` alias, limits
+the title to 200 UTF-16 code units, uses Desktop's user-title update path, and verifies an exact read-back before
+resolving. Unknown and ambiguous aliases are rejected. It can update the current session or another session known to
+the same Desktop process. The MCP injection itself writes no `~/.claude.json`, project
 `.mcp.json`, Claude `settings.json`, or managed MCP block. A successful title change does use Desktop's normal session
 persistence path so the title survives restart.
 

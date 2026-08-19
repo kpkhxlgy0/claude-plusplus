@@ -747,6 +747,15 @@ therefore ruled that `1.32885.1` be added as a second exact-build adapter record
 covering both records and exact rejection of `1.32885.1.0`. This ruling does not authorize semver normalization,
 fuzzy matching, a fallback record, a `ClaudeDesktopMcpService` change, or any public SDK API change.
 
+**Task 8 live-smoke correction:** The controlled `1.32885.1` smoke test later proved that the UUID Claude exposes in
+the conversation is the session record's `cliSessionId`, while the exported Desktop manager keys `sessions`,
+`getSession`, and `updateSession` by a distinct `local_*` session ID. This runtime evidence supersedes only the
+earlier “no `ClaudeDesktopMcpService` change” conclusion above. Keep the public two-argument API unchanged; the title
+service must try the explicit ID directly, then resolve an exact `cliSessionId` match from the manager's existing
+session map, reject ambiguous matches, and perform update/read-back with the resolved Desktop key through the manager
+lookup contract. A regression test must fail against the direct-lookup-only implementation and assert the exact
+lower-level `local_*` update target.
+
 - [ ] **Step 5: Capture configuration baselines**
 
 Record SHA-256 or an explicit missing marker for:

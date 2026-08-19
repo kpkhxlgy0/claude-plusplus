@@ -49,9 +49,15 @@ Both fields are required. The handler:
 1. trims `session_id` and `title`;
 2. rejects an empty value;
 3. rejects a title longer than 200 UTF-16 code units, matching the current Desktop behavior;
-4. verifies the target exists in Claude Desktop's session manager;
-5. calls the normal Desktop update path with `titleSource: "user"`;
-6. reads the target again and reports success only when the title matches exactly.
+4. resolves `session_id` first as a Desktop session-manager key and then, when needed, as exactly one session record's
+   Claude Code `cliSessionId` UUID; zero or multiple matches are rejected;
+5. verifies the resolved target exists in Claude Desktop's session manager;
+6. calls the normal Desktop update path with `titleSource: "user"`;
+7. reads the target again and reports success only when the title matches exactly.
+
+Claude exposes the current Code session's `cliSessionId` UUID inside the conversation, while Desktop keys its local
+session manager by a separate `local_*` ID. Accepting both forms lets the required explicit argument use the UUID
+Claude can actually supply without weakening the explicit-target contract.
 
 `titleSource: "user"` is required because Desktop ignores an `auto` title update when a user title already exists.
 The tool description tells Claude to call it only after the user explicitly requests a title change.
@@ -205,7 +211,8 @@ Automated coverage must prove:
 - exact compatibility probes and fail-closed mismatches;
 - per-session SDK instance creation without overwriting Desktop servers;
 - idle and running-session reconciliation and safe removal;
-- current and other session title changes, all validation branches, `titleSource: "user"`, and read-back checks;
+- current and other session title changes, CLI-UUID-to-Desktop-key resolution, all validation branches,
+  `titleSource: "user"`, and read-back checks;
 - Main API permission gating and retained-reference disposal;
 - Tweak schema, explicit-ID forwarding, stop cleanup, and absence of filesystem APIs;
 - the complete Claude++ and external Tweak test suites.

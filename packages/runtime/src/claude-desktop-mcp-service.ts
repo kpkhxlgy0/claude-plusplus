@@ -278,15 +278,26 @@ export class ClaudeDesktopMcpService {
 
     const manager = this.bindings?.sessionManager;
     if (!manager) throw new Error("Claude Desktop session titles API is unavailable");
-    const existing = await manager.getSession(targetSessionId);
+    let desktopSessionId = targetSessionId;
+    let existing = await manager.getSession(desktopSessionId);
+    if (!existing) {
+      const mappedSessionIds = findSessionIdsByCliSessionId(manager.sessions, targetSessionId);
+      if (mappedSessionIds.length > 1) {
+        throw new Error(`Session "${targetSessionId}" matched multiple Desktop sessions`);
+      }
+      if (mappedSessionIds.length === 1) {
+        desktopSessionId = mappedSessionIds[0];
+        existing = await manager.getSession(desktopSessionId);
+      }
+    }
     if (!existing) throw new Error(`Session "${targetSessionId}" was not found`);
 
-    await manager.updateSession(targetSessionId, {
+    await manager.updateSession(desktopSessionId, {
       title: nextTitle,
       titleSource: "user",
     });
 
-    const updated = await manager.getSession(targetSessionId);
+    const updated = await manager.getSession(desktopSessionId);
     if (!updated || typeof updated !== "object") {
       throw new Error(`Session "${targetSessionId}" was not found after update`);
     }
@@ -403,4 +414,18 @@ function asActiveSession(value: unknown): ActiveDesktopSession | null {
   const session = value as Partial<ActiveDesktopSession>;
   if (!session.activeMcpServers || typeof session.activeMcpServers !== "object") return null;
   return session as ActiveDesktopSession;
+}
+
+function findSessionIdsByCliSessionId(
+  sessions: ReadonlyMap<string, unknown>,
+  cliSessionId: string,
+): string[] {
+  const matches: string[] = [];
+  for (const [sessionId, value] of sessions) {
+    if (value && typeof value === "object"
+      && (value as { cliSessionId?: unknown }).cliSessionId === cliSessionId) {
+      matches.push(sessionId);
+    }
+  }
+  return matches;
 }
