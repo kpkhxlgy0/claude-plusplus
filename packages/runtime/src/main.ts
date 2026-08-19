@@ -102,6 +102,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
   installPreloadDiagnostics(deps.electron, log);
   const lifecycle = new TweakLifecycle((message) => log.error(message));
   const ipc = createMainIpcBridge(deps.electron);
+  let shutdownRequested = false;
   const startMainTweaks = async (items: RunnableTweak[]): Promise<void> => {
     await lifecycle.startAll(items, (manifest) => createMainTweakApiLease({
       manifest,
@@ -121,6 +122,20 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
     broadcastRendererReload: (reason) => broadcastRendererReload(deps.electron, reason),
     log: (message) => log.info(message),
   });
+  const activeReloads = new Set<Promise<void>>();
+  const reload = manager.reload.bind(manager);
+  manager.reload = (reason): Promise<void> => {
+    if (shutdownRequested) return Promise.resolve();
+    const activeReload = reload(reason);
+    activeReloads.add(activeReload);
+    void activeReload.finally(() => activeReloads.delete(activeReload)).catch(() => {});
+    return activeReload;
+  };
+  const drainReloads = async (): Promise<void> => {
+    while (activeReloads.size > 0) {
+      await Promise.allSettled([...activeReloads]);
+    }
+  };
   const disposeManagementIpc = installManagementIpc({
     electron: deps.electron,
     userRoot: deps.userRoot,
@@ -142,7 +157,6 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
   let stopWatching: () => Promise<void> = async () => {};
   let startupPromise = Promise.resolve();
   let shutdownPromise: Promise<void> | undefined;
-  let shutdownRequested = false;
   let quitAllowed = false;
   const runShutdownStep = async (
     label: string,
@@ -155,11 +169,12 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
     }
   };
   const shutdown = async (): Promise<void> => {
+    await runShutdownStep("Tweak watcher disposal", () => stopWatching());
     await runShutdownStep("Main Tweak startup", () => startupPromise);
+    await runShutdownStep("Tweak reload drain", () => drainReloads());
     await runShutdownStep("Main Tweak disposal", () => lifecycle.stopAll());
     await runShutdownStep("Desktop MCP service disposal", () => deps.desktopMcpService.dispose());
     await runShutdownStep("Management IPC disposal", () => disposeManagementIpc());
-    await runShutdownStep("Tweak watcher disposal", () => stopWatching());
   };
   deps.electron.app.on("will-quit", (event) => {
     if (quitAllowed) return;

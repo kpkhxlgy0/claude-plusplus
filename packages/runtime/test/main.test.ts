@@ -711,6 +711,92 @@ test("quit continues later cleanup when shared Desktop service disposal rejects"
   }
 });
 
+test("quit drains a pending reload replacement start before disposing the shared service", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-reload-quit-"));
+  let resolveReplacementStart: (() => void) | undefined;
+  let reloadPromise: Promise<unknown> | undefined;
+  try {
+    const tweakRoot = join(root, "tweaks", "com.example.reload-quit");
+    mkdirSync(tweakRoot, { recursive: true });
+    writeFileSync(join(tweakRoot, "manifest.json"), JSON.stringify({
+      ...mainManifest("com.example.reload-quit"),
+      permissions: ["mcp"],
+    }));
+    writeFileSync(join(tweakRoot, "index.js"), `module.exports = { async start(api) {
+      await api.mcp.registerServer({
+        name: "claudepp_reload_quit",
+        tools: [{
+          name: "ping",
+          description: "Ping",
+          inputSchema: { type: "object", properties: {} },
+          handler: async () => ({ content: [{ type: "text", text: "pong" }] }),
+        }],
+      });
+    } };\n`);
+    const replacementStart = new Promise<void>((resolve) => {
+      resolveReplacementStart = resolve;
+    });
+    const calls: string[] = [];
+    const desktopMcpService = new FakeDesktopMcpService(
+      calls,
+      undefined,
+      Promise.resolve(),
+      undefined,
+      [Promise.resolve(), replacementStart],
+    );
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    let willQuit: FakeWillQuitListener | undefined;
+    const electron = fakeElectron(
+      fakeSession(),
+      undefined,
+      undefined,
+      (channel, handler) => handlers.set(channel, handler),
+      undefined,
+      (listener) => { willQuit = listener; },
+    );
+    electron.app.quit = () => { calls.push("quit"); };
+
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
+    });
+    const reload = handlers.get("claudepp:reload-tweaks");
+    assert.ok(reload);
+    reloadPromise = Promise.resolve(reload({}));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(willQuit);
+    willQuit({ preventDefault: () => calls.push("prevent") });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const registration = "register:com.example.reload-quit:claudepp_reload_quit";
+    const leaseDisposal = "dispose-mcp:com.example.reload-quit";
+    assert.deepEqual(calls, [registration, leaseDisposal, registration, "prevent"]);
+
+    resolveReplacementStart?.();
+    await reloadPromise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(calls, [
+      registration,
+      leaseDisposal,
+      registration,
+      "prevent",
+      leaseDisposal,
+      "dispose-service",
+      "quit",
+    ]);
+    assert.equal(desktopMcpService.disposeCount, 1);
+  } finally {
+    resolveReplacementStart?.();
+    await reloadPromise?.catch(() => {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("proxies Renderer filesystem access only for a declared Tweak", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-renderer-fs-"));
   try {
@@ -859,12 +945,14 @@ function mcpServer(): TweakMcpServer {
 class FakeDesktopMcpService {
   public readonly created: string[] = [];
   public disposeCount = 0;
+  private registrationCount = 0;
 
   public constructor(
     private readonly calls: string[] = [],
     private readonly installError?: Error,
     private readonly disposeGate: Promise<void> = Promise.resolve(),
     private readonly disposeError?: Error,
+    private readonly registrationGates: Promise<void>[] = [],
   ) {}
 
   public installEarly(): void {
@@ -881,6 +969,9 @@ class FakeDesktopMcpService {
         registerServer: async (server: TweakMcpServer) => {
           if (!active) throw new Error("fake MCP lease is disposed");
           this.calls.push(`register:${manifest.id}:${server.name}`);
+          const gate = this.registrationGates[this.registrationCount];
+          this.registrationCount += 1;
+          await gate;
           return {
             unregister: async () => {
               if (!active) throw new Error("fake MCP lease is disposed");
