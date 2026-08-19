@@ -5,6 +5,24 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.2.6
+
+Release notes: [docs/releases/0.2.6.md](docs/releases/0.2.6.md)
+
+### Added
+
+- Added Main-only `mcp` registration for handler-backed, in-process MCP servers in supported Claude Desktop builds.
+- Added Main-only `claude-session-title-write` for updating a known Desktop session through an explicit session ID.
+- Published the independent [Claude Session Title Tweak](https://github.com/kpkhxlgy0/claude-session-title) as the
+  reference integration; it is Desktop-only and does not add terminal Claude Code support.
+
+### Security
+
+- Version-, hash-, and shape-locked the private Desktop adapter so unsupported builds fail closed without MCP
+  configuration writes or another private fallback.
+- Revoked MCP handlers and title APIs with their Main leases, rejected server collisions and structural changes for
+  the lifetime of a Desktop process, and kept normal Desktop title persistence separate from MCP injection.
+
 ## 0.2.5
 
 Release notes: [docs/releases/0.2.5.md](docs/releases/0.2.5.md)

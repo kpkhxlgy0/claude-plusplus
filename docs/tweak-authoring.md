@@ -2,7 +2,115 @@
 
 Claude++ Tweaks are CommonJS modules with a `start(api)` lifecycle and an optional `stop()` lifecycle. Their `manifest.json` declares both the processes in which they run and the capabilities exposed by each process-specific API lease.
 
-This document describes the focused Claude Code settings capability added in Claude++ 0.2.5.
+This document describes the focused Main Tweak capabilities added in Claude++ 0.2.5 and 0.2.6.
+
+## Desktop runtime MCP and session titles
+
+Claude++ 0.2.6 adds two Main-only permissions:
+
+- `mcp` exposes `api.mcp.registerServer(...)` for handler-backed, in-process MCP servers.
+- `claude-session-title-write` exposes `api.claude.sessionTitles.setTitle(sessionId, title)` for an explicit Claude Desktop session ID.
+
+Renderer-only manifests cannot request either permission, and Renderer API leases never expose either capability. A
+Main-only manifest requesting both capabilities looks like this:
+
+```json
+{
+  "id": "com.example.session-title",
+  "name": "Example Session Title",
+  "version": "0.1.0",
+  "githubRepo": "example/session-title",
+  "minRuntime": "0.2.6",
+  "scope": "main",
+  "main": "index.js",
+  "permissions": [
+    "mcp",
+    "claude-session-title-write"
+  ]
+}
+```
+
+The following CommonJS Tweak registers one runnable MCP tool and releases its registration during `stop()`:
+
+```js
+let registration;
+
+async function start(api) {
+  if (api.process !== "main") return;
+  if (!api.mcp || !api.claude?.sessionTitles) {
+    throw new Error("This Tweak requires Claude++ 0.2.6 or newer.");
+  }
+
+  registration = await api.mcp.registerServer({
+    name: "claudepp_example_title",
+    version: "0.1.0",
+    tools: [{
+      name: "set_session_title",
+      description: "Change a Desktop session title only after an explicit user request.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          session_id: { type: "string" },
+          title: { type: "string" },
+        },
+        required: ["session_id", "title"],
+        additionalProperties: false,
+      },
+      async handler(input, context) {
+        api.log.info("Session title request", {
+          callerSessionId: context.callerSessionId,
+          targetSessionId: input.session_id,
+        });
+        const updated = await api.claude.sessionTitles.setTitle(input.session_id, input.title);
+        return {
+          content: [{ type: "text", text: `Renamed session ${updated.sessionId}.` }],
+        };
+      },
+    }],
+  });
+}
+
+async function stop() {
+  const activeRegistration = registration;
+  registration = undefined;
+  await activeRegistration?.unregister();
+}
+
+module.exports = { start, stop };
+```
+
+`registerServer` accepts lowercase server and tool names made from letters, digits, `_`, and `-`. Server names must
+start with `claudepp_`; every server needs at least one tool, and every tool needs an object JSON Schema. Tool results
+contain MCP text content. The read-only handler context identifies the caller session for auditing; it does not select
+the title target. A title target always comes from the explicit `sessionId` argument.
+
+The registration is a revocable lease. Call `unregister()` during `stop()` even though Claude++ also revokes all
+registrations when the owning Main API lease is disposed. Revocation immediately makes retained handlers and API
+references reject; active Desktop sessions then reconcile through their normal idle or post-turn path.
+
+For one Desktop process, the first accepted server structure is immutable: server name and version plus tool names,
+descriptions, and input schemas cannot change after unregister, disable, or hot reload. A same-owner hot reload may
+replace handler functions only when that complete structure is identical. Existing SDK handlers dynamically resolve
+the current active handler, so do not retain or call a handler from a previous Tweak lease.
+
+`setTitle` trims both arguments, accepts only a known Desktop session, limits the title to 200 UTF-16 code units, uses
+Desktop's user-title update path, and verifies an exact read-back before resolving. It can update the current session
+or another session known to the same Desktop process. The MCP injection itself writes no `~/.claude.json`, project
+`.mcp.json`, Claude `settings.json`, or managed MCP block. A successful title change does use Desktop's normal session
+persistence path so the title survives restart.
+
+These APIs support Claude Desktop only; they do not add tools to terminal-launched Claude Code. Runtime 0.2.6 is
+locked to an exact supported private Desktop build, including module hashes and runtime shapes. A version, hash, or
+shape mismatch fails closed: Claude continues to run, no server is injected, and Claude++ does not fall back to a
+configuration write or another private patch.
+
+This is an approved difference from Codex++. Codex++ declares external `command`/`args`/`env` servers in
+`manifest.mcp` and synchronizes a managed block into `~/.codex/config.toml`. To meet Claude++'s no-configuration-write
+requirement, Claude++ instead hosts SDK handlers in process and gives each Main Tweak a revocable registration lease.
+The tradeoff is Desktop-only support and maintenance whenever the private Desktop boundary changes.
+
+The independent [Claude Session Title Tweak](https://github.com/kpkhxlgy0/claude-session-title) is a complete example
+of this pattern.
 
 ## Claude Code settings capability
 
