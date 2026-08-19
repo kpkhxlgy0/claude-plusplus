@@ -8,6 +8,8 @@ export const VALID_TWEAK_PERMISSIONS = [
   "claude-sessions",
   "startup-environment",
   "claude-code-settings",
+  "mcp",
+  "claude-session-title-write",
 ] as const;
 
 export type TweakScope = (typeof VALID_TWEAK_SCOPES)[number];
@@ -139,6 +141,39 @@ export interface TweakFs {
   exists(relPath: string): Promise<boolean>;
 }
 
+export interface TweakMcpToolContext {
+  callerSessionId: string;
+}
+
+export interface TweakMcpCallResult {
+  content: Array<{ type: "text"; text: string }>;
+  isError?: boolean;
+}
+
+export interface TweakMcpTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  handler(
+    input: Record<string, unknown>,
+    context: TweakMcpToolContext,
+  ): TweakMcpCallResult | Promise<TweakMcpCallResult>;
+}
+
+export interface TweakMcpServer {
+  name: string;
+  version?: string;
+  tools: readonly TweakMcpTool[];
+}
+
+export interface TweakMcpRegistration {
+  unregister(): Promise<void>;
+}
+
+export interface TweakMcpApi {
+  registerServer(server: TweakMcpServer): Promise<TweakMcpRegistration>;
+}
+
 export interface ClaudeSessionsApi {
   resolveFile(sessionId: string, filePath: string): Promise<string | null>;
   resolveReference(
@@ -151,8 +186,18 @@ export interface ClaudeSessionsApi {
   getWorkspaceRoot(sessionId: string): Promise<string | null>;
 }
 
+export interface ClaudeSessionTitleUpdate {
+  sessionId: string;
+  title: string;
+}
+
+export interface ClaudeSessionTitlesApi {
+  setTitle(sessionId: string, title: string): Promise<ClaudeSessionTitleUpdate>;
+}
+
 export interface ClaudeApi {
-  sessions: ClaudeSessionsApi;
+  sessions?: ClaudeSessionsApi;
+  sessionTitles?: ClaudeSessionTitlesApi;
 }
 
 export interface TweakApi {
@@ -164,6 +209,7 @@ export interface TweakApi {
   ipc: TweakIpc;
   fs: TweakFs;
   claude?: ClaudeApi;
+  mcp?: TweakMcpApi;
   startupEnvironment?: StartupEnvironmentApi;
   claudeCodeSettings?: ClaudeCodeSettingsApi;
 }
@@ -260,6 +306,13 @@ export function validateTweakManifest(manifest: unknown): TweakManifestValidatio
           errors.push({
             path: `permissions[${index}]`,
             message: "permission must be a known Claude++ permission string",
+          });
+        }
+        if (manifest.scope === "renderer" &&
+          (permission === "mcp" || permission === "claude-session-title-write")) {
+          errors.push({
+            path: `permissions[${index}]`,
+            message: "permission requires a Main-capable Tweak scope",
           });
         }
       });

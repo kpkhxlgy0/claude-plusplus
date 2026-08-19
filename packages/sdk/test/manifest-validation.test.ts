@@ -6,6 +6,8 @@ import {
   validateTweakManifest,
   type ClaudeApi,
   type ClaudeCodeSettingsApi,
+  type ClaudeSessionTitlesApi,
+  type ClaudeSessionTitleUpdate,
   type SettingsApi,
   type SettingsHandle,
   type SettingsPage,
@@ -16,6 +18,12 @@ import {
   type TweakApi,
   type TweakFs,
   type TweakIpc,
+  type TweakMcpApi,
+  type TweakMcpCallResult,
+  type TweakMcpRegistration,
+  type TweakMcpServer,
+  type TweakMcpTool,
+  type TweakMcpToolContext,
   type TweakStorage,
 } from "../src/index.ts";
 
@@ -126,6 +134,8 @@ test("exposes the focused Claude Sessions permission and rejects former private 
     "claude-sessions",
     "startup-environment",
     "claude-code-settings",
+    "mcp",
+    "claude-session-title-write",
   ]);
 
   for (const permission of [
@@ -150,6 +160,33 @@ test("exposes the focused Claude Sessions permission and rejects former private 
 
     assert.equal(result.ok, false, permission);
     assert.equal(result.errors[0]?.path, "permissions[0]", permission);
+  }
+});
+
+test("accepts Main runtime MCP and session title permissions", () => {
+  const result = validateTweakManifest({
+    id: "com.example.title",
+    name: "Title",
+    version: "0.1.0",
+    githubRepo: "example/title",
+    scope: "main",
+    permissions: ["mcp", "claude-session-title-write"],
+  });
+  assert.equal(result.ok, true);
+});
+
+test("rejects Main-only MCP permissions on a Renderer Tweak", () => {
+  for (const permission of ["mcp", "claude-session-title-write"] as const) {
+    const result = validateTweakManifest({
+      id: `com.example.${permission}`,
+      name: permission,
+      version: "0.1.0",
+      githubRepo: "example/renderer",
+      scope: "renderer",
+      permissions: [permission],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.errors.some((issue) => issue.path === "permissions[0]"), true);
   }
 });
 
@@ -368,6 +405,47 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
       return handle;
     },
   };
+  const mcpContext: TweakMcpToolContext = { callerSessionId: "caller_session" };
+  const mcpCallResult: TweakMcpCallResult = {
+    content: [{ type: "text", text: "Renamed local_session to Renamed" }],
+  };
+  const mcpTool: TweakMcpTool = {
+    name: "set_session_title",
+    description: "Set a session title by explicit session ID.",
+    inputSchema: {
+      type: "object",
+      required: ["session_id", "title"],
+    },
+    handler(input, context): TweakMcpCallResult {
+      assert.deepEqual(input, { session_id: "local_session", title: "Renamed" });
+      assert.equal(context, mcpContext);
+      return mcpCallResult;
+    },
+  };
+  const mcpServer: TweakMcpServer = {
+    name: "claudepp_session_title",
+    version: "0.1.0",
+    tools: [mcpTool],
+  };
+  let mcpUnregistered = false;
+  const mcpRegistration: TweakMcpRegistration = {
+    async unregister(): Promise<void> {
+      mcpUnregistered = true;
+    },
+  };
+  const mcp: TweakMcpApi = {
+    async registerServer(server): Promise<TweakMcpRegistration> {
+      assert.equal(server, mcpServer);
+      assert.equal(
+        await server.tools[0]?.handler(
+          { session_id: "local_session", title: "Renamed" },
+          mcpContext,
+        ),
+        mcpCallResult,
+      );
+      return mcpRegistration;
+    },
+  };
   const claude: ClaudeApi = {
     sessions: {
       async resolveFile(sessionId, filePath): Promise<string | null> {
@@ -387,6 +465,17 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
         assert.equal(sessionId, "local_session");
         return "D:\\workspace\\sgproj";
       },
+    },
+  };
+  const sessionTitleUpdate: ClaudeSessionTitleUpdate = {
+    sessionId: "local_session",
+    title: "Renamed",
+  };
+  const sessionTitles: ClaudeSessionTitlesApi = {
+    async setTitle(sessionId, title): Promise<ClaudeSessionTitleUpdate> {
+      assert.equal(sessionId, "local_session");
+      assert.equal(title, "Renamed");
+      return sessionTitleUpdate;
     },
   };
   const startupConfig: StartupEnvironmentConfig = {
@@ -451,7 +540,8 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
   const mainApi: TweakApi = {
     ...api,
     process: "main",
-    claude: undefined,
+    claude: { sessionTitles },
+    mcp,
     startupEnvironment,
     claudeCodeSettings,
   };
@@ -461,15 +551,15 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
   assert.equal(api.settings?.register(section), handle);
   assert.equal(api.settings?.registerPage(page), handle);
   assert.equal(
-    await api.claude?.sessions.resolveFile("local_session", "Assets/GameEntry.cs"),
+    await api.claude?.sessions?.resolveFile("local_session", "Assets/GameEntry.cs"),
     "D:\\workspace\\sgproj\\Assets\\GameEntry.cs",
   );
   assert.equal(
-    await api.claude?.sessions.resolveReference("local_session", "resp_file_link", "GameEntry.cs", 0, 1),
+    await api.claude?.sessions?.resolveReference("local_session", "resp_file_link", "GameEntry.cs", 0, 1),
     "file:///D:/workspace/sgproj/Assets/GameEntry.cs#L12",
   );
   assert.equal(
-    await api.claude?.sessions.getWorkspaceRoot("local_session"),
+    await api.claude?.sessions?.getWorkspaceRoot("local_session"),
     "D:\\workspace\\sgproj",
   );
   assert.equal(mainApi.startupEnvironment?.getStatus(), startupStatus);
@@ -490,5 +580,13 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
       codeSettingsWritten?.revision ?? "",
     ).exists,
     false,
+  );
+  const registration = await mainApi.mcp?.registerServer(mcpServer);
+  assert.equal(registration, mcpRegistration);
+  await registration?.unregister();
+  assert.equal(mcpUnregistered, true);
+  assert.equal(
+    await mainApi.claude?.sessionTitles?.setTitle("local_session", "Renamed"),
+    sessionTitleUpdate,
   );
 });
