@@ -4,11 +4,20 @@ import { TweakManager, type TweakWatcher } from "../src/tweak-manager.ts";
 
 test("reload stops main Tweaks, clears modules, rediscovers, starts, then broadcasts", async () => {
   const calls: string[] = [];
+  const activeRegistrations = new Set(["old"]);
+  const observedAtReplacementStart: string[][] = [];
   const manager = new TweakManager({
-    async stopMainTweaks() { calls.push("stop"); },
+    async stopMainTweaks() {
+      calls.push("stop");
+      activeRegistrations.clear();
+    },
     clearMainModuleCache() { calls.push("clear-cache"); },
     discoverMainTweaks() { calls.push("discover"); return []; },
-    async startMainTweaks() { calls.push("start"); },
+    async startMainTweaks() {
+      observedAtReplacementStart.push([...activeRegistrations]);
+      activeRegistrations.add("replacement");
+      calls.push("start");
+    },
     broadcastRendererReload() { calls.push("broadcast"); },
     log() {},
   });
@@ -16,6 +25,8 @@ test("reload stops main Tweaks, clears modules, rediscovers, starts, then broadc
   await manager.reload("enabled-toggle");
 
   assert.deepEqual(calls, ["stop", "clear-cache", "discover", "start", "broadcast"]);
+  assert.deepEqual(observedAtReplacementStart, [[]]);
+  assert.deepEqual([...activeRegistrations], ["replacement"]);
 });
 
 test("filesystem changes debounce to one reload and ignore node_modules", async () => {

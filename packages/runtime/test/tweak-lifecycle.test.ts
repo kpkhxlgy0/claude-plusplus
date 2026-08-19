@@ -23,23 +23,39 @@ test("starts each Tweak once and stops and disposes it at most once", async () =
   assert.deepEqual(calls, ["start", "stop", "dispose"]);
 });
 
-test("reload stops, disposes, and then starts with a new lease", async () => {
+test("reload revokes the old registration before the replacement starts", async () => {
   const calls: string[] = [];
   const lifecycle = new TweakLifecycle(() => {});
+  const activeRegistrations = new Set<number>();
+  const observedAtStart: number[][] = [];
   let generation = 0;
   const tweak = runnable("com.example.reload", {
-    start() { calls.push(`start-${generation}`); },
+    start() {
+      observedAtStart.push([...activeRegistrations]);
+      activeRegistrations.add(generation);
+      calls.push(`start-${generation}`);
+    },
     stop() { calls.push(`stop-${generation}`); },
   });
   const factory = (value: TweakManifest): TweakApiLease => {
     generation += 1;
-    return leaseFor(value, calls, `dispose-${generation}`);
+    const leaseGeneration = generation;
+    const lease = leaseFor(value, calls, `dispose-${leaseGeneration}`);
+    return {
+      ...lease,
+      dispose() {
+        activeRegistrations.delete(leaseGeneration);
+        return lease.dispose();
+      },
+    };
   };
 
   await lifecycle.startAll([tweak], factory);
   await lifecycle.reloadAll([tweak], factory);
 
   assert.deepEqual(calls, ["start-1", "stop-1", "dispose-1", "start-2"]);
+  assert.deepEqual(observedAtStart, [[], []]);
+  assert.deepEqual([...activeRegistrations], [2]);
 });
 
 test("stops Tweaks and disposes their leases in reverse order", async () => {

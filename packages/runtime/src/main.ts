@@ -19,6 +19,16 @@ import {
   resolveClaudeCodeSettingsFile,
   type ClaudeCodeSettingsService,
 } from "./claude-code-settings.js";
+import {
+  ClaudeDesktopMcpService,
+  type ClaudeSessionTitlesApiLease,
+} from "./claude-desktop-mcp-service.js";
+import type { TweakMcpApiLease } from "./tweak-mcp-registry.js";
+
+export type RuntimeDesktopMcpService = Pick<
+  ClaudeDesktopMcpService,
+  "installEarly" | "createMcpApiLease" | "createSessionTitlesApiLease" | "dispose"
+>;
 
 export interface RuntimeBootstrapDeps {
   electron: typeof import("electron");
@@ -27,6 +37,50 @@ export interface RuntimeBootstrapDeps {
   sourceRoot?: string;
   startupEnvironment: StartupEnvironmentService;
   claudeCodeSettings: ClaudeCodeSettingsService;
+  desktopMcpService: RuntimeDesktopMcpService;
+}
+
+export interface RuntimeModuleInitializerDeps {
+  electron: typeof import("electron");
+  userRoot: string;
+  runtimeRoot: string;
+  startupEnvironment: StartupEnvironmentService;
+  claudeCodeSettings: ClaudeCodeSettingsService;
+  log?: TweakLogger;
+  createDesktopMcpService?: () => RuntimeDesktopMcpService;
+  bootstrap?: (deps: RuntimeBootstrapDeps) => Promise<void>;
+}
+
+export function initializeRuntimeModule(deps: RuntimeModuleInitializerDeps): void {
+  const logs = join(deps.userRoot, "log");
+  mkdirSync(logs, { recursive: true });
+  const log = deps.log ?? createLogger(join(logs, "main.log"));
+  let desktopMcpService: RuntimeDesktopMcpService | undefined;
+  try {
+    desktopMcpService = deps.createDesktopMcpService?.() ?? new ClaudeDesktopMcpService({
+      desktopVersion: deps.electron.app.getVersion(),
+      log,
+    });
+    desktopMcpService.installEarly();
+  } catch (error) {
+    log.error(`[Claude++] Desktop MCP observer setup failed: ${errorMessage(error)}`);
+    void desktopMcpService?.dispose().catch((disposeError) => {
+      log.error(`[Claude++] Desktop MCP setup cleanup failed: ${errorMessage(disposeError)}`);
+    });
+    desktopMcpService = createUnsupportedDesktopMcpService();
+  }
+
+  const bootstrap = deps.bootstrap ?? bootstrapRuntime;
+  void bootstrap({
+    electron: deps.electron,
+    userRoot: deps.userRoot,
+    preloadPath: resolve(deps.runtimeRoot, "preload", "index.js"),
+    startupEnvironment: deps.startupEnvironment,
+    claudeCodeSettings: deps.claudeCodeSettings,
+    desktopMcpService,
+  }).catch((error) => {
+    log.error(`[bootstrap] ${errorMessage(error)}`);
+  });
 }
 
 export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void> {
@@ -56,6 +110,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
       ipc,
       startupEnvironment: deps.startupEnvironment,
       claudeCodeSettings: deps.claudeCodeSettings,
+      desktopMcpService: deps.desktopMcpService,
     }));
   };
   const manager = new TweakManager({
@@ -93,7 +148,11 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
     : async (): Promise<void> => {};
   deps.electron.app.on("will-quit", () => {
     disposeManagementIpc();
-    void stopWatching().finally(() => lifecycle.stopAll());
+    void stopWatching()
+      .catch((error) => log.warn(`Tweak watcher disposal failed: ${errorMessage(error)}`))
+      .then(() => lifecycle.stopAll())
+      .finally(() => deps.desktopMcpService.dispose())
+      .catch((error) => log.warn(`Runtime shutdown failed: ${errorMessage(error)}`));
   });
 }
 
@@ -250,35 +309,73 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function createUnsupportedDesktopMcpService(): RuntimeDesktopMcpService {
+  let disposed = false;
+  const unsupported = (): Error => new Error(
+    disposed
+      ? "Claude Desktop MCP service is disposed"
+      : "Claude Desktop MCP service is unsupported",
+  );
+  return {
+    installEarly() {},
+    createMcpApiLease(): TweakMcpApiLease {
+      let active = true;
+      return {
+        api: {
+          registerServer: async () => {
+            if (!active) throw new Error("Claude Desktop MCP API lease is disposed");
+            throw unsupported();
+          },
+        },
+        dispose: async () => {
+          active = false;
+        },
+      };
+    },
+    createSessionTitlesApiLease(): ClaudeSessionTitlesApiLease {
+      let active = true;
+      return {
+        api: {
+          setTitle: async () => {
+            if (!active) throw new Error("Claude Desktop session titles API lease is disposed");
+            throw unsupported();
+          },
+        },
+        dispose: async () => {
+          active = false;
+        },
+      };
+    },
+    dispose: async () => {
+      disposed = true;
+    },
+  };
+}
+
 const userRoot = process.env.CLAUDE_PLUSPLUS_USER_ROOT;
 const runtimeRoot = process.env.CLAUDE_PLUSPLUS_RUNTIME;
-let startupEnvironment: StartupEnvironmentService | undefined;
-let claudeCodeSettings: ClaudeCodeSettingsService | undefined;
 if (userRoot && runtimeRoot) {
   const logs = join(userRoot, "log");
   mkdirSync(logs, { recursive: true });
   const log = createLogger(join(logs, "main.log"));
-  startupEnvironment = initializeStartupEnvironment({
+  const startupEnvironment = initializeStartupEnvironment({
     userRoot,
     env: process.env,
     log,
   });
-  claudeCodeSettings = initializeClaudeCodeSettings({
+  const claudeCodeSettings = initializeClaudeCodeSettings({
     settingsFile: resolveClaudeCodeSettingsFile(),
     log,
   });
-}
-if (userRoot && runtimeRoot && process.versions.electron) {
-  const electron = require("electron") as typeof import("electron");
-  void bootstrapRuntime({
-    electron,
-    userRoot,
-    preloadPath: resolve(runtimeRoot, "preload", "index.js"),
-    startupEnvironment: startupEnvironment as StartupEnvironmentService,
-    claudeCodeSettings: claudeCodeSettings as ClaudeCodeSettingsService,
-  }).catch((error) => {
-    const logs = join(userRoot, "log");
-    mkdirSync(logs, { recursive: true });
-    appendFileSync(join(logs, "main.log"), `[bootstrap] ${errorMessage(error)}\n`, "utf8");
-  });
+  if (process.versions.electron) {
+    const electron = require("electron") as typeof import("electron");
+    initializeRuntimeModule({
+      electron,
+      userRoot,
+      runtimeRoot,
+      startupEnvironment,
+      claudeCodeSettings,
+      log,
+    });
+  }
 }

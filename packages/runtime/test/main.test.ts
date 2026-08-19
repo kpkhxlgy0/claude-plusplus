@@ -10,9 +10,66 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { bootstrapRuntime } from "../src/main.ts";
+import type { TweakManifest, TweakMcpServer } from "@claude-plusplus/sdk";
+import { bootstrapRuntime, initializeRuntimeModule } from "../src/main.ts";
 import { initializeStartupEnvironment } from "../src/startup-environment.ts";
 import { initializeClaudeCodeSettings } from "../src/claude-code-settings.ts";
+
+test("Runtime initializer installs the Desktop observer synchronously before yielding to Claude", () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-early-mcp-"));
+  try {
+    const calls: string[] = [];
+    const desktopMcpService = new FakeDesktopMcpService(calls);
+    let bootstrapService: FakeDesktopMcpService | undefined;
+
+    initializeRuntimeModule({
+      electron: fakeElectron(fakeSession()),
+      userRoot: root,
+      runtimeRoot: "C:\\runtime",
+      startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
+      createDesktopMcpService: () => desktopMcpService,
+      bootstrap: async (deps) => {
+        calls.push("bootstrap");
+        bootstrapService = deps.desktopMcpService as FakeDesktopMcpService;
+      },
+    });
+    calls.push("original-entry");
+
+    assert.deepEqual(calls, ["install-early", "bootstrap", "original-entry"]);
+    assert.equal(bootstrapService, desktopMcpService);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Runtime initializer logs Desktop observer setup errors and supplies an unsupported service", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-mcp-fallback-"));
+  try {
+    let bootstrapService: FakeDesktopMcpService | undefined;
+    const brokenService = new FakeDesktopMcpService([], new Error("observer failed"));
+
+    assert.doesNotThrow(() => initializeRuntimeModule({
+      electron: fakeElectron(fakeSession()),
+      userRoot: root,
+      runtimeRoot: "C:\\runtime",
+      startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
+      createDesktopMcpService: () => brokenService,
+      bootstrap: async (deps) => {
+        bootstrapService = deps.desktopMcpService as FakeDesktopMcpService;
+      },
+    }));
+    assert.ok(bootstrapService);
+    assert.notEqual(bootstrapService, brokenService);
+
+    const lease = bootstrapService.createMcpApiLease(mainManifest("com.example.unsupported"));
+    await assert.rejects(() => lease.api.registerServer(mcpServer()), /unsupported/);
+    assert.match(readFileSync(join(root, "log", "main.log"), "utf8"), /observer failed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("registers every Settings management handler once", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-handlers-"));
@@ -31,6 +88,7 @@ test("registers every Settings management handler once", async () => {
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
 
     assert.deepEqual([...handlers.keys()].filter((name) => name.startsWith("claudepp:")).sort(), [
@@ -76,6 +134,7 @@ test("registers the Claude++ preload additively with modern Electron", async () 
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
 
     assert.deepEqual(registrations, [{
@@ -105,6 +164,7 @@ test("preserves existing preloads when the modern API is unavailable", async () 
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
 
     assert.deepEqual(preloads, ["C:\\official\\preload.js", "C:\\runtime\\preload.js"]);
@@ -129,6 +189,7 @@ test("registers the preload on Sessions created after bootstrap", async () => {
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     sessionCreated?.(fakeSession((options) => {
       laterRegistrations.push(options);
@@ -169,6 +230,7 @@ test("registers the default Session only once when session-created fires during 
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
 
     assert.equal(registrationCount, 1);
@@ -202,6 +264,7 @@ test("registers Renderer preload and CSP compatibility once per Session", async 
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     sessionCreated?.(laterSession);
     sessionCreated?.(laterSession);
@@ -240,6 +303,7 @@ test("registers the default Session from the ready event before the official win
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
 
     assert.equal(registrationWasEarly, true);
@@ -265,6 +329,7 @@ test("records Renderer sandbox settings and preload failures from created web co
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     webContentsCreated?.(undefined, {
       id: 17,
@@ -311,6 +376,7 @@ test("serves the full Tweak catalog and validated Renderer source through separa
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     const catalog = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{
       manifest: { id: string };
@@ -339,7 +405,7 @@ test("serves the full Tweak catalog and validated Renderer source through separa
   }
 });
 
-test("reload evaluates changed main Tweak source installed through a junction", async (t) => {
+test("reload revokes the old Main MCP lease before starting changed source", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-junction-reload-"));
   try {
     const tweaksRoot = join(root, "tweaks");
@@ -353,11 +419,22 @@ test("reload evaluates changed main Tweak source installed through a junction", 
       version: "0.2.0",
       githubRepo: "example/junction-reload",
       scope: "main",
-      permissions: ["ipc"],
+      permissions: ["ipc", "mcp"],
     }));
     const writeTweak = (version: number) => writeFileSync(
       join(sourceRoot, "index.js"),
-      `module.exports = { start(api) { api.ipc.handle("version", () => ${version}); } };\n`,
+      `module.exports = { async start(api) {
+        await api.mcp.registerServer({
+          name: "claudepp_junction",
+          tools: [{
+            name: "version",
+            description: "Return the fixture version",
+            inputSchema: { type: "object", properties: {} },
+            handler: async () => ({ content: [{ type: "text", text: "${version}" }] }),
+          }],
+        });
+        api.ipc.handle("version", () => ${version});
+      } };\n`,
     );
     writeTweak(1);
     try {
@@ -367,6 +444,8 @@ test("reload evaluates changed main Tweak source installed through a junction", 
       return;
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const registryCalls: string[] = [];
+    const desktopMcpService = new FakeDesktopMcpService(registryCalls);
     const electron = fakeElectron(
       fakeSession(() => "default"),
       undefined,
@@ -381,6 +460,7 @@ test("reload evaluates changed main Tweak source installed through a junction", 
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
     });
     const channel = "claudepp:com.example.junction:version";
     assert.equal(await handlers.get(channel)?.({}), 1);
@@ -389,6 +469,113 @@ test("reload evaluates changed main Tweak source installed through a junction", 
     await handlers.get("claudepp:reload-tweaks")?.({});
 
     assert.equal(await handlers.get(channel)?.({}), 2);
+    assert.deepEqual(registryCalls.filter((call) => call !== "install-early"), [
+      "register:com.example.junction:claudepp_junction",
+      "dispose-mcp:com.example.junction",
+      "register:com.example.junction:claudepp_junction",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("disabling a Main Tweak revokes its Desktop MCP lease", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-disable-mcp-"));
+  try {
+    const tweakRoot = join(root, "tweaks", "com.example.disable-mcp");
+    mkdirSync(tweakRoot, { recursive: true });
+    writeFileSync(join(tweakRoot, "manifest.json"), JSON.stringify({
+      ...mainManifest("com.example.disable-mcp"),
+      permissions: ["mcp"],
+    }));
+    writeFileSync(join(tweakRoot, "index.js"), `module.exports = { async start(api) {
+      await api.mcp.registerServer({
+        name: "claudepp_disable",
+        tools: [{
+          name: "ping",
+          description: "Ping",
+          inputSchema: { type: "object", properties: {} },
+          handler: async () => ({ content: [{ type: "text", text: "pong" }] }),
+        }],
+      });
+    } };\n`);
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const registryCalls: string[] = [];
+    const desktopMcpService = new FakeDesktopMcpService(registryCalls);
+    const electron = fakeElectron(
+      fakeSession(),
+      undefined,
+      undefined,
+      (channel, handler) => handlers.set(channel, handler),
+    );
+
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
+    });
+    await handlers.get("claudepp:set-tweak-enabled")?.({}, "com.example.disable-mcp", false);
+
+    assert.deepEqual(registryCalls, [
+      "register:com.example.disable-mcp:claudepp_disable",
+      "dispose-mcp:com.example.disable-mcp",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("app quit revokes Main Tweak leases before disposing the shared Desktop service", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-quit-mcp-"));
+  try {
+    const tweakRoot = join(root, "tweaks", "com.example.quit-mcp");
+    mkdirSync(tweakRoot, { recursive: true });
+    writeFileSync(join(tweakRoot, "manifest.json"), JSON.stringify({
+      ...mainManifest("com.example.quit-mcp"),
+      permissions: ["mcp"],
+    }));
+    writeFileSync(join(tweakRoot, "index.js"), `module.exports = { async start(api) {
+      await api.mcp.registerServer({
+        name: "claudepp_quit",
+        tools: [{
+          name: "ping",
+          description: "Ping",
+          inputSchema: { type: "object", properties: {} },
+          handler: async () => ({ content: [{ type: "text", text: "pong" }] }),
+        }],
+      });
+    } };\n`);
+    const calls: string[] = [];
+    const desktopMcpService = new FakeDesktopMcpService(calls);
+    let willQuit: (() => void) | undefined;
+    const electron = fakeElectron(
+      fakeSession(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (listener) => { willQuit = listener; },
+    );
+
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
+    });
+    willQuit?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(calls, [
+      "register:com.example.quit-mcp:claudepp_quit",
+      "dispose-mcp:com.example.quit-mcp",
+      "dispose-service",
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -427,6 +614,7 @@ test("proxies Renderer filesystem access only for a declared Tweak", async () =>
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     const fsHandler = handlers.get("claudepp:tweak-fs");
     assert.ok(fsHandler);
@@ -467,6 +655,8 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
     let registrationCount = 0;
     let cspHookCount = 0;
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const desktopMcpService = new FakeDesktopMcpService();
+    let willQuit: (() => void) | undefined;
     const electron = fakeElectron(
       fakeSession(
         () => {
@@ -478,6 +668,8 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
       undefined,
       undefined,
       (channel, handler) => handlers.set(channel, handler),
+      undefined,
+      (listener) => { willQuit = listener; },
     );
 
     await bootstrapRuntime({
@@ -486,12 +678,17 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
       preloadPath: "C:\\runtime\\preload.js",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
     });
     const payload = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{ enabled: boolean }>;
+    willQuit?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.equal(registrationCount, 1);
     assert.equal(cspHookCount, 0);
     assert.deepEqual(payload.map((item) => item.enabled), [false]);
+    assert.deepEqual(desktopMcpService.created, []);
+    assert.equal(desktopMcpService.disposeCount, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -505,6 +702,92 @@ function fakeSession(
     registerPreloadScript,
     webRequest: { onHeadersReceived },
   };
+}
+
+function mainManifest(id: string): TweakManifest {
+  return {
+    id,
+    name: id,
+    version: "0.2.0",
+    githubRepo: "example/runtime-mcp",
+    scope: "main",
+  };
+}
+
+function mcpServer(): TweakMcpServer {
+  return {
+    name: "claudepp_runtime",
+    tools: [{
+      name: "ping",
+      description: "Ping",
+      inputSchema: { type: "object", properties: {} },
+      handler: async () => ({ content: [{ type: "text", text: "pong" }] }),
+    }],
+  };
+}
+
+class FakeDesktopMcpService {
+  public readonly created: string[] = [];
+  public disposeCount = 0;
+
+  public constructor(
+    private readonly calls: string[] = [],
+    private readonly installError?: Error,
+  ) {}
+
+  public installEarly(): void {
+    this.calls.push("install-early");
+    if (this.installError) throw this.installError;
+  }
+
+  public createMcpApiLease(manifest: Readonly<TweakManifest>) {
+    const label = `mcp:${manifest.id}`;
+    this.created.push(label);
+    let active = true;
+    return {
+      api: {
+        registerServer: async (server: TweakMcpServer) => {
+          if (!active) throw new Error("fake MCP lease is disposed");
+          this.calls.push(`register:${manifest.id}:${server.name}`);
+          return {
+            unregister: async () => {
+              if (!active) throw new Error("fake MCP lease is disposed");
+              this.calls.push(`unregister:${manifest.id}:${server.name}`);
+            },
+          };
+        },
+      },
+      dispose: async () => {
+        if (!active) return;
+        active = false;
+        this.calls.push(`dispose-${label}`);
+      },
+    };
+  }
+
+  public createSessionTitlesApiLease() {
+    const label = "titles";
+    this.created.push(label);
+    let active = true;
+    return {
+      api: {
+        setTitle: async (sessionId: string, title: string) => {
+          if (!active) throw new Error("fake title lease is disposed");
+          return { sessionId, title };
+        },
+      },
+      dispose: async () => {
+        if (!active) return;
+        active = false;
+        this.calls.push(`dispose-${label}`);
+      },
+    };
+  }
+
+  public async dispose(): Promise<void> {
+    this.disposeCount += 1;
+    this.calls.push("dispose-service");
+  }
 }
 
 function startupEnvironment(root: string) {
@@ -530,6 +813,7 @@ function fakeElectron(
   ) => void,
   captureIpcHandle?: (channel: string, handler: (...args: unknown[]) => unknown) => void,
   captureIpcRemoveHandler?: (channel: string) => void,
+  captureWillQuit?: (listener: () => void) => void,
 ): typeof import("electron") {
   return {
     app: {
@@ -542,6 +826,7 @@ function fakeElectron(
             webContents: Record<string, unknown>,
           ) => void);
         }
+        if (event === "will-quit") captureWillQuit?.(listener as unknown as () => void);
       },
     },
     session: { defaultSession },

@@ -17,6 +17,7 @@ import {
 import type { TweakApiLease } from "./tweak-lifecycle.js";
 import type { StartupEnvironmentService } from "./startup-environment.js";
 import type { ClaudeCodeSettingsService } from "./claude-code-settings.js";
+import type { ClaudeDesktopMcpService } from "./claude-desktop-mcp-service.js";
 
 export interface MainTweakApiOptions {
   manifest: TweakManifest;
@@ -25,6 +26,10 @@ export interface MainTweakApiOptions {
   ipc: MainTweakIpcBridge;
   startupEnvironment: StartupEnvironmentService;
   claudeCodeSettings: ClaudeCodeSettingsService;
+  desktopMcpService: Pick<
+    ClaudeDesktopMcpService,
+    "createMcpApiLease" | "createSessionTitlesApiLease"
+  >;
 }
 
 export interface RendererStorageBridge {
@@ -53,6 +58,14 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
   const claudeCodeSettings = options.manifest.permissions?.includes("claude-code-settings")
     ? options.claudeCodeSettings.createApiLease(options.manifest)
     : undefined;
+  const mcp = options.manifest.permissions?.includes("mcp")
+    ? options.desktopMcpService.createMcpApiLease(options.manifest)
+    : undefined;
+  const sessionTitles = options.manifest.permissions?.includes("claude-session-title-write")
+    ? options.desktopMcpService.createSessionTitlesApiLease()
+    : undefined;
+  const claude = sessionTitles ? { sessionTitles: sessionTitles.api } : undefined;
+  let disposed = false;
   return {
     api: {
       manifest: options.manifest,
@@ -63,8 +76,14 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
       fs,
       ...(startupEnvironment ? { startupEnvironment: startupEnvironment.api } : {}),
       ...(claudeCodeSettings ? { claudeCodeSettings: claudeCodeSettings.api } : {}),
+      ...(mcp ? { mcp: mcp.api } : {}),
+      ...(claude ? { claude } : {}),
     },
     async dispose(): Promise<void> {
+      if (disposed) return;
+      disposed = true;
+      await mcp?.dispose();
+      await sessionTitles?.dispose();
       claudeCodeSettings?.dispose();
       startupEnvironment?.dispose();
       try {

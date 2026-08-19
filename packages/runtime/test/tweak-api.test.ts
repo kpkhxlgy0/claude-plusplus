@@ -3,13 +3,131 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { TweakLogger, TweakManifest } from "@claude-plusplus/sdk";
+import type {
+  ClaudeSessionTitleUpdate,
+  TweakLogger,
+  TweakManifest,
+  TweakMcpRegistration,
+  TweakMcpServer,
+} from "@claude-plusplus/sdk";
 import {
   createMainTweakApiLease,
   createRendererTweakApiLease,
 } from "../src/tweak-api.ts";
 import { initializeStartupEnvironment } from "../src/startup-environment.ts";
 import { initializeClaudeCodeSettings } from "../src/claude-code-settings.ts";
+import type { ClaudeSessionTitlesApiLease } from "../src/claude-desktop-mcp-service.ts";
+import type { TweakMcpApiLease } from "../src/tweak-mcp-registry.ts";
+import { TweakLifecycle } from "../src/tweak-lifecycle.ts";
+
+test("Main API exposes Desktop capabilities only for their exact permissions", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-desktop-api-permissions-"));
+  try {
+    for (const [permissions, expected] of [
+      [[], { mcp: false, titles: false, created: [] }],
+      [["mcp"], { mcp: true, titles: false, created: ["mcp:com.example.api"] }],
+      [["claude-session-title-write"], {
+        mcp: false,
+        titles: true,
+        created: ["titles"],
+      }],
+    ] as const) {
+      const desktopMcpService = new FakeDesktopMcpService();
+      const lease = mainLease(root, permissions, desktopMcpService);
+
+      assert.equal(lease.api.mcp !== undefined, expected.mcp);
+      assert.equal(lease.api.claude?.sessionTitles !== undefined, expected.titles);
+      assert.deepEqual(desktopMcpService.created, expected.created);
+      await lease.dispose();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Renderer API never exposes Desktop MCP or session title capabilities", async () => {
+  const lease = createRendererTweakApiLease({
+    manifest: manifest(["mcp", "claude-session-title-write"]),
+    log,
+    storage: localStorageBridge(new Map()),
+    ipc: rendererIpcBridge(async () => undefined),
+  });
+
+  assert.equal(lease.api.mcp, undefined);
+  assert.equal(lease.api.claude, undefined);
+  await lease.dispose();
+});
+
+test("Main API disposal revokes retained Desktop capability references before IPC", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-desktop-api-disposal-"));
+  try {
+    const calls: string[] = [];
+    const desktopMcpService = new FakeDesktopMcpService(calls);
+    const lease = createMainTweakApiLease({
+      manifest: manifest(["mcp", "claude-session-title-write"]),
+      userRoot: root,
+      log,
+      ipc: mainIpcBridge(calls),
+      startupEnvironment: initializeStartupEnvironment({ userRoot: root, env: {}, log }),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
+    });
+    lease.api.ipc.on("ready", () => {});
+    const registerServer = lease.api.mcp?.registerServer;
+    const setTitle = lease.api.claude?.sessionTitles?.setTitle;
+    assert.ok(registerServer);
+    assert.ok(setTitle);
+    const registration = await registerServer(server());
+    const unregister = registration.unregister;
+
+    await lease.dispose();
+
+    await assert.rejects(() => registerServer(server()), /disposed/);
+    await assert.rejects(() => unregister(), /disposed/);
+    await assert.rejects(() => setTitle("session-1", "Updated"), /disposed/);
+    assert.deepEqual(calls, [
+      "dispose-mcp:com.example.api",
+      "dispose-titles",
+      "dispose-ipc",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Main Desktop capability disposal remains idempotent after Tweak start throws", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-desktop-api-failed-start-"));
+  try {
+    const desktopMcpService = new FakeDesktopMcpService();
+    const lifecycle = new TweakLifecycle(() => {});
+    let failedLease: ReturnType<typeof createMainTweakApiLease> | undefined;
+
+    await lifecycle.startAll([{
+      manifest: manifest(["mcp", "claude-session-title-write"]),
+      tweak: { start() { throw new Error("boom"); } },
+    }], (value) => {
+      failedLease = createMainTweakApiLease({
+        manifest: value,
+        userRoot: root,
+        log,
+        ipc: mainIpcBridge(),
+        startupEnvironment: initializeStartupEnvironment({ userRoot: root, env: {}, log }),
+        claudeCodeSettings: codeSettings(root),
+        desktopMcpService,
+      });
+      return failedLease;
+    });
+    await lifecycle.stopAll();
+    await failedLease?.dispose();
+
+    assert.deepEqual(desktopMcpService.disposed, [
+      "mcp:com.example.api",
+      "titles",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("Main API persists storage and gates filesystem operations", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-main-api-"));
@@ -22,6 +140,7 @@ test("Main API persists storage and gates filesystem operations", async () => {
       ipc: mainIpcBridge(),
       startupEnvironment,
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     withoutFs.api.storage.set("enabled", true);
     await assert.rejects(() => withoutFs.api.fs.write("state.txt", "bad"), /filesystem permission/);
@@ -34,6 +153,7 @@ test("Main API persists storage and gates filesystem operations", async () => {
       ipc: mainIpcBridge(),
       startupEnvironment,
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     assert.equal(withFs.api.storage.get("enabled"), true);
     await withFs.api.fs.write("state.txt", "ok");
@@ -191,6 +311,7 @@ test("Main API gates startup environment permission and revokes retained referen
       ipc: mainIpcBridge(),
       startupEnvironment,
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     assert.equal(withoutPermission.api.startupEnvironment, undefined);
     await withoutPermission.dispose();
@@ -202,6 +323,7 @@ test("Main API gates startup environment permission and revokes retained referen
       ipc: mainIpcBridge(),
       startupEnvironment,
       claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     const retained = withPermission.api.startupEnvironment;
     assert.ok(retained);
@@ -234,6 +356,7 @@ test("Main API gates Claude Code settings permission and revokes retained refere
       ipc: mainIpcBridge(),
       startupEnvironment,
       claudeCodeSettings: service,
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     assert.equal(withoutPermission.api.claudeCodeSettings, undefined);
     await withoutPermission.dispose();
@@ -245,6 +368,7 @@ test("Main API gates Claude Code settings permission and revokes retained refere
       ipc: mainIpcBridge(),
       startupEnvironment,
       claudeCodeSettings: service,
+      desktopMcpService: new FakeDesktopMcpService(),
     });
     const retained = withPermission.api.claudeCodeSettings;
     assert.ok(retained);
@@ -331,10 +455,103 @@ function localStorageBridge(values: Map<string, string>) {
   };
 }
 
-function mainIpcBridge() {
+function mainLease(
+  root: string,
+  permissions: TweakManifest["permissions"],
+  desktopMcpService: FakeDesktopMcpService,
+) {
+  return createMainTweakApiLease({
+    manifest: manifest(permissions),
+    userRoot: root,
+    log,
+    ipc: mainIpcBridge(),
+    startupEnvironment: initializeStartupEnvironment({ userRoot: root, env: {}, log }),
+    claudeCodeSettings: codeSettings(root),
+    desktopMcpService,
+  });
+}
+
+function server(): TweakMcpServer {
   return {
-    on(): void {},
-    removeListener(): void {},
+    name: "claudepp_example",
+    tools: [{
+      name: "echo",
+      description: "Echo input",
+      inputSchema: { type: "object", properties: {} },
+      handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    }],
+  };
+}
+
+class FakeDesktopMcpService {
+  public readonly created: string[] = [];
+  public readonly disposed: string[] = [];
+
+  public constructor(private readonly calls: string[] = []) {}
+
+  public createMcpApiLease(manifestValue: Readonly<TweakManifest>): TweakMcpApiLease {
+    const label = `mcp:${manifestValue.id}`;
+    this.created.push(label);
+    let active = true;
+    const registrations = new Set<{ active: boolean }>();
+    const assertActive = (registration?: { active: boolean }): void => {
+      if (!active || registration?.active === false) throw new Error("fake MCP lease is disposed");
+    };
+    return {
+      api: {
+        registerServer: async (_server: TweakMcpServer): Promise<TweakMcpRegistration> => {
+          assertActive();
+          const registration = { active: true };
+          registrations.add(registration);
+          return {
+            unregister: async () => {
+              assertActive(registration);
+              registration.active = false;
+            },
+          };
+        },
+      },
+      dispose: async () => {
+        if (!active) return;
+        active = false;
+        for (const registration of registrations) registration.active = false;
+        this.disposed.push(label);
+        this.calls.push(`dispose-${label}`);
+      },
+    };
+  }
+
+  public createSessionTitlesApiLease(): ClaudeSessionTitlesApiLease {
+    const label = "titles";
+    this.created.push(label);
+    let active = true;
+    return {
+      api: {
+        setTitle: async (sessionId, title): Promise<ClaudeSessionTitleUpdate> => {
+          if (!active) throw new Error("fake session titles lease is disposed");
+          return { sessionId, title };
+        },
+      },
+      dispose: async () => {
+        if (!active) return;
+        active = false;
+        this.disposed.push(label);
+        this.calls.push(`dispose-${label}`);
+      },
+    };
+  }
+}
+
+function mainIpcBridge(calls: string[] = []) {
+  const listeners = new Map<string, (...args: unknown[]) => void>();
+  return {
+    on(channel: string, listener: (...args: unknown[]) => void): void {
+      listeners.set(channel, listener);
+    },
+    removeListener(channel: string): void {
+      listeners.delete(channel);
+      calls.push("dispose-ipc");
+    },
     handle(): void {},
     removeHandler(): void {},
     getWebContents: () => [],
