@@ -139,21 +139,51 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
   };
   deps.electron.app.on("session-created", (session) => register(session));
   deps.electron.app.on("ready", () => register(deps.electron.session.defaultSession));
+  let stopWatching: () => Promise<void> = async () => {};
+  let startupPromise = Promise.resolve();
+  let shutdownPromise: Promise<void> | undefined;
+  let shutdownRequested = false;
+  let quitAllowed = false;
+  const runShutdownStep = async (
+    label: string,
+    cleanup: () => void | Promise<void>,
+  ): Promise<void> => {
+    try {
+      await cleanup();
+    } catch (error) {
+      log.warn(`${label} failed during shutdown: ${errorMessage(error)}`);
+    }
+  };
+  const shutdown = async (): Promise<void> => {
+    await runShutdownStep("Main Tweak startup", () => startupPromise);
+    await runShutdownStep("Main Tweak disposal", () => lifecycle.stopAll());
+    await runShutdownStep("Desktop MCP service disposal", () => deps.desktopMcpService.dispose());
+    await runShutdownStep("Management IPC disposal", () => disposeManagementIpc());
+    await runShutdownStep("Tweak watcher disposal", () => stopWatching());
+  };
+  deps.electron.app.on("will-quit", (event) => {
+    if (quitAllowed) return;
+    event.preventDefault();
+    shutdownRequested = true;
+    if (shutdownPromise) return;
+    shutdownPromise = shutdown().then(() => {
+      quitAllowed = true;
+      deps.electron.app.quit();
+    });
+    void shutdownPromise.catch((error) => {
+      log.warn(`Runtime shutdown coordinator failed: ${errorMessage(error)}`);
+    });
+  });
   await deps.electron.app.whenReady();
+  if (shutdownRequested) return;
   register(deps.electron.session.defaultSession);
 
-  await startMainTweaks(loadMainTweaks(tweaks, deps.userRoot, log));
-  const stopWatching = process.versions.electron
+  startupPromise = startMainTweaks(loadMainTweaks(tweaks, deps.userRoot, log));
+  await startupPromise;
+  if (shutdownRequested) return;
+  stopWatching = process.versions.electron
     ? manager.watch(tweaks)
     : async (): Promise<void> => {};
-  deps.electron.app.on("will-quit", () => {
-    disposeManagementIpc();
-    void stopWatching()
-      .catch((error) => log.warn(`Tweak watcher disposal failed: ${errorMessage(error)}`))
-      .then(() => lifecycle.stopAll())
-      .finally(() => deps.desktopMcpService.dispose())
-      .catch((error) => log.warn(`Runtime shutdown failed: ${errorMessage(error)}`));
-  });
 }
 
 function isPathInside(root: string, candidate: string): boolean {

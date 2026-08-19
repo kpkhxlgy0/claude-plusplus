@@ -550,7 +550,7 @@ test("app quit revokes Main Tweak leases before disposing the shared Desktop ser
     } };\n`);
     const calls: string[] = [];
     const desktopMcpService = new FakeDesktopMcpService(calls);
-    let willQuit: (() => void) | undefined;
+    let willQuit: FakeWillQuitListener | undefined;
     const electron = fakeElectron(
       fakeSession(),
       undefined,
@@ -568,7 +568,7 @@ test("app quit revokes Main Tweak leases before disposing the shared Desktop ser
       claudeCodeSettings: codeSettings(root),
       desktopMcpService,
     });
-    willQuit?.();
+    willQuit?.({ preventDefault() {} });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.deepEqual(calls, [
@@ -576,6 +576,136 @@ test("app quit revokes Main Tweak leases before disposing the shared Desktop ser
       "dispose-mcp:com.example.quit-mcp",
       "dispose-service",
     ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("quit waits for idempotent cleanup when readiness is still pending", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-early-quit-"));
+  let resolveReady: (() => void) | undefined;
+  let resolveServiceDispose: (() => void) | undefined;
+  let bootstrapPromise: Promise<void> | undefined;
+  try {
+    const tweakRoot = join(root, "tweaks", "com.example.early-quit");
+    mkdirSync(tweakRoot, { recursive: true });
+    writeFileSync(join(tweakRoot, "manifest.json"), JSON.stringify({
+      ...mainManifest("com.example.early-quit"),
+      permissions: ["mcp"],
+    }));
+    writeFileSync(join(tweakRoot, "index.js"), `module.exports = { async start(api) {
+      await api.mcp.registerServer({
+        name: "claudepp_early_quit",
+        tools: [{
+          name: "ping",
+          description: "Ping",
+          inputSchema: { type: "object", properties: {} },
+          handler: async () => ({ content: [{ type: "text", text: "pong" }] }),
+        }],
+      });
+    } };\n`);
+    const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+    const serviceDispose = new Promise<void>((resolve) => { resolveServiceDispose = resolve; });
+    const calls: string[] = [];
+    const desktopMcpService = new FakeDesktopMcpService(calls, undefined, serviceDispose);
+    let willQuit: FakeWillQuitListener | undefined;
+    const electron = fakeElectron(
+      fakeSession(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (listener) => { willQuit = listener; },
+    );
+    electron.app.whenReady = () => ready;
+    electron.app.quit = () => {
+      calls.push("quit");
+      willQuit?.({ preventDefault: () => calls.push("prevent-reentrant") });
+    };
+
+    bootstrapPromise = bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
+    });
+    const firstEvent = { preventDefault: () => calls.push("prevent-first") };
+    const duplicateEvent = { preventDefault: () => calls.push("prevent-duplicate") };
+    assert.ok(willQuit);
+    willQuit(firstEvent);
+    willQuit(duplicateEvent);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(calls, ["prevent-first", "prevent-duplicate", "dispose-service"]);
+    assert.equal(desktopMcpService.disposeCount, 1);
+
+    resolveServiceDispose?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(calls, [
+      "prevent-first",
+      "prevent-duplicate",
+      "dispose-service",
+      "quit",
+    ]);
+    resolveReady?.();
+    await bootstrapPromise;
+    assert.deepEqual(desktopMcpService.created, []);
+  } finally {
+    resolveServiceDispose?.();
+    resolveReady?.();
+    await bootstrapPromise?.catch(() => {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("quit continues later cleanup when shared Desktop service disposal rejects", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-rejected-quit-cleanup-"));
+  try {
+    const calls: string[] = [];
+    const desktopMcpService = new FakeDesktopMcpService(
+      calls,
+      undefined,
+      Promise.resolve(),
+      new Error("service disposal failed"),
+    );
+    let willQuit: FakeWillQuitListener | undefined;
+    let managementDisposed = false;
+    const electron = fakeElectron(
+      fakeSession(),
+      undefined,
+      undefined,
+      undefined,
+      () => {
+        if (managementDisposed) return;
+        managementDisposed = true;
+        calls.push("dispose-management");
+      },
+      (listener) => { willQuit = listener; },
+    );
+    electron.app.quit = () => { calls.push("quit"); };
+
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
+    });
+    assert.ok(willQuit);
+    willQuit({ preventDefault: () => calls.push("prevent") });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(calls, [
+      "prevent",
+      "dispose-service",
+      "dispose-management",
+      "quit",
+    ]);
+    assert.equal(desktopMcpService.disposeCount, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -656,7 +786,7 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
     let cspHookCount = 0;
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const desktopMcpService = new FakeDesktopMcpService();
-    let willQuit: (() => void) | undefined;
+    let willQuit: FakeWillQuitListener | undefined;
     const electron = fakeElectron(
       fakeSession(
         () => {
@@ -681,7 +811,7 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
       desktopMcpService,
     });
     const payload = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{ enabled: boolean }>;
-    willQuit?.();
+    willQuit?.({ preventDefault() {} });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.equal(registrationCount, 1);
@@ -733,6 +863,8 @@ class FakeDesktopMcpService {
   public constructor(
     private readonly calls: string[] = [],
     private readonly installError?: Error,
+    private readonly disposeGate: Promise<void> = Promise.resolve(),
+    private readonly disposeError?: Error,
   ) {}
 
   public installEarly(): void {
@@ -787,8 +919,16 @@ class FakeDesktopMcpService {
   public async dispose(): Promise<void> {
     this.disposeCount += 1;
     this.calls.push("dispose-service");
+    await this.disposeGate;
+    if (this.disposeError) throw this.disposeError;
   }
 }
+
+interface FakeQuitEvent {
+  preventDefault(): void;
+}
+
+type FakeWillQuitListener = (event: FakeQuitEvent) => void;
 
 function startupEnvironment(root: string) {
   return initializeStartupEnvironment({
@@ -813,7 +953,7 @@ function fakeElectron(
   ) => void,
   captureIpcHandle?: (channel: string, handler: (...args: unknown[]) => unknown) => void,
   captureIpcRemoveHandler?: (channel: string) => void,
-  captureWillQuit?: (listener: () => void) => void,
+  captureWillQuit?: (listener: FakeWillQuitListener) => void,
 ): typeof import("electron") {
   return {
     app: {
@@ -826,8 +966,11 @@ function fakeElectron(
             webContents: Record<string, unknown>,
           ) => void);
         }
-        if (event === "will-quit") captureWillQuit?.(listener as unknown as () => void);
+        if (event === "will-quit") {
+          captureWillQuit?.(listener as unknown as FakeWillQuitListener);
+        }
       },
+      quit() {},
     },
     session: { defaultSession },
     ipcMain: {

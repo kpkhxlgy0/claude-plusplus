@@ -65,7 +65,25 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
     ? options.desktopMcpService.createSessionTitlesApiLease()
     : undefined;
   const claude = sessionTitles ? { sessionTitles: sessionTitles.api } : undefined;
-  let disposed = false;
+  let disposalPromise: Promise<void> | undefined;
+  const disposeResources = async (): Promise<void> => {
+    const errors: unknown[] = [];
+    const attempt = async (dispose: () => void | Promise<void>): Promise<void> => {
+      try {
+        await dispose();
+      } catch (error) {
+        errors.push(error);
+      }
+    };
+    await attempt(() => mcp?.dispose());
+    await attempt(() => sessionTitles?.dispose());
+    await attempt(() => claudeCodeSettings?.dispose());
+    await attempt(() => startupEnvironment?.dispose());
+    await attempt(() => ipc.dispose());
+    await attempt(() => storage.dispose());
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Main Tweak API disposal failed");
+  };
   return {
     api: {
       manifest: options.manifest,
@@ -79,18 +97,9 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
       ...(mcp ? { mcp: mcp.api } : {}),
       ...(claude ? { claude } : {}),
     },
-    async dispose(): Promise<void> {
-      if (disposed) return;
-      disposed = true;
-      await mcp?.dispose();
-      await sessionTitles?.dispose();
-      claudeCodeSettings?.dispose();
-      startupEnvironment?.dispose();
-      try {
-        await ipc.dispose();
-      } finally {
-        storage.dispose();
-      }
+    dispose(): Promise<void> {
+      disposalPromise ??= disposeResources();
+      return disposalPromise;
     },
   };
 }

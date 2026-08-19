@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -91,6 +91,75 @@ test("Main API disposal revokes retained Desktop capability references before IP
       "dispose-ipc",
     ]);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Main API disposal attempts title, IPC, and storage after Desktop disposer rejections", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-desktop-api-rejected-disposal-"));
+  try {
+    const calls: string[] = [];
+    const desktopMcpService = new FakeDesktopMcpService(calls, {
+      mcpDisposeError: new Error("MCP disposal failed"),
+      titleDisposeError: new Error("title disposal failed"),
+    });
+    const lease = createMainTweakApiLease({
+      manifest: manifest(["mcp", "claude-session-title-write"]),
+      userRoot: root,
+      log,
+      ipc: mainIpcBridge(calls),
+      startupEnvironment: initializeStartupEnvironment({ userRoot: root, env: {}, log }),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
+    });
+    lease.api.ipc.on("ready", () => {});
+    lease.api.storage.set("flushed", true);
+    let disposalError: unknown;
+
+    try {
+      await lease.dispose();
+    } catch (error) {
+      disposalError = error;
+    }
+
+    assert.ok(disposalError instanceof AggregateError);
+    assert.deepEqual(
+      disposalError.errors.map((error) => error instanceof Error ? error.message : String(error)),
+      ["MCP disposal failed", "title disposal failed"],
+    );
+    assert.deepEqual(calls, [
+      "dispose-mcp:com.example.api",
+      "dispose-titles",
+      "dispose-ipc",
+    ]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(root, "storage", "com.example.api.json"), "utf8")),
+      { flushed: true },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent Main API disposal shares one in-flight cleanup promise", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-desktop-api-concurrent-disposal-"));
+  let resolveMcpDispose: (() => void) | undefined;
+  try {
+    const calls: string[] = [];
+    const mcpDisposeGate = new Promise<void>((resolve) => { resolveMcpDispose = resolve; });
+    const desktopMcpService = new FakeDesktopMcpService(calls, { mcpDisposeGate });
+    const lease = mainLease(root, ["mcp"], desktopMcpService);
+
+    const first = lease.dispose();
+    const second = lease.dispose();
+
+    assert.equal(second, first);
+    assert.deepEqual(calls, ["dispose-mcp:com.example.api"]);
+    resolveMcpDispose?.();
+    await first;
+    assert.deepEqual(calls, ["dispose-mcp:com.example.api"]);
+  } finally {
+    resolveMcpDispose?.();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -487,7 +556,14 @@ class FakeDesktopMcpService {
   public readonly created: string[] = [];
   public readonly disposed: string[] = [];
 
-  public constructor(private readonly calls: string[] = []) {}
+  public constructor(
+    private readonly calls: string[] = [],
+    private readonly disposal: {
+      mcpDisposeError?: Error;
+      titleDisposeError?: Error;
+      mcpDisposeGate?: Promise<void>;
+    } = {},
+  ) {}
 
   public createMcpApiLease(manifestValue: Readonly<TweakManifest>): TweakMcpApiLease {
     const label = `mcp:${manifestValue.id}`;
@@ -517,6 +593,8 @@ class FakeDesktopMcpService {
         for (const registration of registrations) registration.active = false;
         this.disposed.push(label);
         this.calls.push(`dispose-${label}`);
+        await this.disposal.mcpDisposeGate;
+        if (this.disposal.mcpDisposeError) throw this.disposal.mcpDisposeError;
       },
     };
   }
@@ -537,6 +615,7 @@ class FakeDesktopMcpService {
         active = false;
         this.disposed.push(label);
         this.calls.push(`dispose-${label}`);
+        if (this.disposal.titleDisposeError) throw this.disposal.titleDisposeError;
       },
     };
   }
