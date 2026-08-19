@@ -116,24 +116,32 @@ immutable; a hot reload may replace handlers but must retain the same structural
 ## Claude Desktop compatibility adapter
 
 The private adapter is installed synchronously while Claude++ Runtime is loaded, before the original Claude Desktop
-entry module. It wraps CommonJS module loading only long enough to observe four exact modules for the supported
-Desktop build and then restores the original loader.
+entry module. It selects one record by exact Desktop app-version string, wraps CommonJS module loading only long
+enough to observe that record's four exact modules, and then restores the original loader.
 
-Initial supported build: Claude Desktop `1.26832.0`.
+Initial supported build: Claude Desktop app version `1.26832.0`. A second record supports app version `1.32885.1`,
+which corresponds to Windows MSIX version `1.32885.1.0`.
 
-| Role | Bundled module | SHA-256 |
-|---|---|---|
-| MCP coordinator | `index.chunk-BaOfA05g.js` | `2ee867ed8d9a37bbd080e36fe70761a5c950ddf5f83eba34e3352e42da810b2b` |
-| Agent SDK helpers | `index.chunk-Cqfh0Vpp.js` | `770123370be8db84e4750a2b593d9a3a0b9ed447c62708f3bc306c9f2a05994c` |
-| CCD session manager | `index2.chunk-ZVJDHx_k.js` | `958cb9170271ab2f39db40b6ab0681a4e21e672327c51337800ba8c46221daba` |
-| JSON Schema converter | `index.chunk-CPsVP-Uv.js` | `d8f3af544b3bb00203422c2a541b1d73f91c1bd85cd7e3ada90e116fdab919f7` |
+| App version | Role | Bundled module | SHA-256 | Export slot |
+|---|---|---|---|---|
+| `1.26832.0` | MCP coordinator | `index.chunk-BaOfA05g.js` | `2ee867ed8d9a37bbd080e36fe70761a5c950ddf5f83eba34e3352e42da810b2b` | `et` |
+| `1.26832.0` | Agent SDK factory | `index.chunk-Cqfh0Vpp.js` | `770123370be8db84e4750a2b593d9a3a0b9ed447c62708f3bc306c9f2a05994c` | `t` |
+| `1.26832.0` | JSON Schema converter | `index.chunk-CPsVP-Uv.js` | `d8f3af544b3bb00203422c2a541b1d73f91c1bd85cd7e3ada90e116fdab919f7` | `t` |
+| `1.26832.0` | CCD session manager | `index2.chunk-ZVJDHx_k.js` | `958cb9170271ab2f39db40b6ab0681a4e21e672327c51337800ba8c46221daba` | `claudeCodeSessionManager` |
+| `1.32885.1` | MCP coordinator | `index2.chunk-CxKk9JLq.js` | `80811026e6adf46b5f6d8c9d95303908f34668cde1c7aa47b6404ac2a7d52ae3` | `Ct` |
+| `1.32885.1` | Agent SDK factory | `index.chunk-mU2Ud8Q2.js` | `4599836d15846febabe6ba2d25ee5935d046b823174f4ce23ddb0670b54cf526` | `o` |
+| `1.32885.1` | JSON Schema converter | `index2.chunk-BCdS6ADu.js` | `e2a496d092c2e328b186425660fbf36a39e36b3ecadb4d5c8a2fae0ae9ac0ec1` | `t` |
+| `1.32885.1` | CCD session manager | `index2.chunk-Doi9IfNA.js` | `a7eaa600b023d2f7a589d0dd2437481b7ad8981ccea2b1f50101817cbbb584ff` | `n` |
 
 The adapter requires both the hashes and runtime shapes:
 
 - coordinator constructor prototype with `createAllServers`;
 - Agent SDK `createSdkMcpServer` helper;
 - JSON Schema-to-Zod-shape converter;
-- `claudeCodeSessionManager` with `sessions`, `getSession`, `updateSession`, and `applyMcpServersIfIdle`.
+- selected session-manager export with `sessions`, `getSession`, `updateSession`, and `applyMcpServersIfIdle`.
+
+The adapter does not normalize semver, match fuzzy basenames or source text, or fall back to another record. An exact
+version, basename, hash, export slot, or runtime-shape mismatch fails closed before bindings are published.
 
 Only after every check passes does it atomically wrap the exported coordinator's `createAllServers`. The wrapper first
 awaits Desktop's original result, then adds a fresh SDK server instance per registered server and per Desktop session.

@@ -739,6 +739,14 @@ Using the existing `@electron/asar` dependency read-only, calculate all four bun
 Desktop `1.26832.0` ASAR and compare them to the spec literals. Assert the coordinator, SDK helper, schema converter,
 and `claudeCodeSessionManager` shapes before installing the test build.
 
+**Task 8 external-update ruling/evidence outcome:** The `1.26832.0` text above remains the initial verification target.
+After Runtime 0.2.6 was built, the live Desktop package was externally updated to Windows MSIX `1.32885.1.0`; the
+running managed mirror reports app version `1.32885.1`. Read-only mapping confirmed a second exact set of four module
+basenames, SHA-256 hashes, and export slots, while the Task 4 service contracts remained compatible. The controller
+therefore ruled that `1.32885.1` be added as a second exact-build adapter record, with table-driven compatibility tests
+covering both records and exact rejection of `1.32885.1.0`. This ruling does not authorize semver normalization,
+fuzzy matching, a fallback record, a `ClaudeDesktopMcpService` change, or any public SDK API change.
+
 - [ ] **Step 5: Capture configuration baselines**
 
 Record SHA-256 or an explicit missing marker for:

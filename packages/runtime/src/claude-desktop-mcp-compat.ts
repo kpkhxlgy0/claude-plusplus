@@ -54,6 +54,12 @@ export interface InstallModuleObserverOptions {
 }
 
 type ModuleRole = "coordinator" | "sdk" | "session" | "schema";
+type ExpectedModule = {
+  basename: string;
+  hash: string;
+  exportSlot: string;
+};
+type CompatibilityRecord = Readonly<Record<ModuleRole, Readonly<ExpectedModule>>>;
 type ModuleLoad = (request: string, parent: unknown, isMain: boolean) => unknown;
 type ModuleInternals = typeof Module & {
   _load: ModuleLoad;
@@ -66,25 +72,53 @@ type ObservedBindings = {
   schema?: ClaudeDesktopMcpBindings["jsonSchemaToZodShape"];
 };
 
-const SUPPORTED_VERSION = "1.26832.0";
-const EXPECTED_MODULES: Readonly<Record<string, { role: ModuleRole; hash: string }>> = Object.freeze({
-  "index.chunk-BaOfA05g.js": {
-    role: "coordinator",
-    hash: "2ee867ed8d9a37bbd080e36fe70761a5c950ddf5f83eba34e3352e42da810b2b",
-  },
-  "index.chunk-Cqfh0Vpp.js": {
-    role: "sdk",
-    hash: "770123370be8db84e4750a2b593d9a3a0b9ed447c62708f3bc306c9f2a05994c",
-  },
-  "index2.chunk-ZVJDHx_k.js": {
-    role: "session",
-    hash: "958cb9170271ab2f39db40b6ab0681a4e21e672327c51337800ba8c46221daba",
-  },
-  "index.chunk-CPsVP-Uv.js": {
-    role: "schema",
-    hash: "d8f3af544b3bb00203422c2a541b1d73f91c1bd85cd7e3ada90e116fdab919f7",
-  },
-});
+const MODULE_ROLES: readonly ModuleRole[] = ["coordinator", "sdk", "session", "schema"];
+const COMPATIBILITY_RECORDS: ReadonlyMap<string, CompatibilityRecord> = new Map<string, CompatibilityRecord>([
+  ["1.26832.0", Object.freeze({
+    coordinator: Object.freeze({
+      basename: "index.chunk-BaOfA05g.js",
+      hash: "2ee867ed8d9a37bbd080e36fe70761a5c950ddf5f83eba34e3352e42da810b2b",
+      exportSlot: "et",
+    }),
+    sdk: Object.freeze({
+      basename: "index.chunk-Cqfh0Vpp.js",
+      hash: "770123370be8db84e4750a2b593d9a3a0b9ed447c62708f3bc306c9f2a05994c",
+      exportSlot: "t",
+    }),
+    session: Object.freeze({
+      basename: "index2.chunk-ZVJDHx_k.js",
+      hash: "958cb9170271ab2f39db40b6ab0681a4e21e672327c51337800ba8c46221daba",
+      exportSlot: "claudeCodeSessionManager",
+    }),
+    schema: Object.freeze({
+      basename: "index.chunk-CPsVP-Uv.js",
+      hash: "d8f3af544b3bb00203422c2a541b1d73f91c1bd85cd7e3ada90e116fdab919f7",
+      exportSlot: "t",
+    }),
+  })],
+  ["1.32885.1", Object.freeze({
+    coordinator: Object.freeze({
+      basename: "index2.chunk-CxKk9JLq.js",
+      hash: "80811026e6adf46b5f6d8c9d95303908f34668cde1c7aa47b6404ac2a7d52ae3",
+      exportSlot: "Ct",
+    }),
+    sdk: Object.freeze({
+      basename: "index.chunk-mU2Ud8Q2.js",
+      hash: "4599836d15846febabe6ba2d25ee5935d046b823174f4ce23ddb0670b54cf526",
+      exportSlot: "o",
+    }),
+    session: Object.freeze({
+      basename: "index2.chunk-Doi9IfNA.js",
+      hash: "a7eaa600b023d2f7a589d0dd2437481b7ad8981ccea2b1f50101817cbbb584ff",
+      exportSlot: "n",
+    }),
+    schema: Object.freeze({
+      basename: "index2.chunk-BCdS6ADu.js",
+      hash: "e2a496d092c2e328b186425660fbf36a39e36b3ecadb4d5c8a2fae0ae9ac0ec1",
+      exportSlot: "t",
+    }),
+  })],
+]);
 
 const moduleInternals = Module as unknown as ModuleInternals;
 
@@ -96,6 +130,7 @@ export function installModuleObserver(
   const observed: ObservedBindings = {};
   const originalLoad = moduleInternals._load;
   const hashFile = options.hashFile ?? sha256File;
+  const compatibilityRecord = COMPATIBILITY_RECORDS.get(options.desktopVersion);
   let wrapper: ModuleLoad | null = null;
 
   const restore = (): void => {
@@ -136,7 +171,7 @@ export function installModuleObserver(
     },
   };
 
-  if (options.desktopVersion !== SUPPORTED_VERSION) {
+  if (!compatibilityRecord) {
     fail("", "version");
     return compatibility;
   }
@@ -154,7 +189,7 @@ export function installModuleObserver(
     }
 
     const moduleBasename = basename(resolvedFilename);
-    const expected = EXPECTED_MODULES[moduleBasename];
+    const expected = findExpectedModule(compatibilityRecord, moduleBasename);
     if (!expected || observed[expected.role]) return loaded;
 
     let actualHash: string;
@@ -169,7 +204,7 @@ export function installModuleObserver(
       return loaded;
     }
 
-    const captured = captureBinding(expected.role, loaded);
+    const captured = captureBinding(expected.role, expected.exportSlot, loaded);
     if (!captured) {
       fail(moduleBasename, "shape");
       return loaded;
@@ -197,12 +232,24 @@ export function installModuleObserver(
   return compatibility;
 }
 
-function captureBinding(role: ModuleRole, loaded: unknown): unknown {
+function findExpectedModule(
+  record: CompatibilityRecord,
+  moduleBasename: string,
+): (ExpectedModule & { role: ModuleRole }) | null {
+  for (const role of MODULE_ROLES) {
+    const expected = record[role];
+    if (expected.basename === moduleBasename) return { role, ...expected };
+  }
+  return null;
+}
+
+function captureBinding(role: ModuleRole, exportSlot: string, loaded: unknown): unknown {
   const exports = asRecord(loaded);
   if (!exports) return null;
   try {
+    const exported = exports[exportSlot];
     if (role === "coordinator") {
-      const coordinator = exports.et;
+      const coordinator = exported;
       const prototype = typeof coordinator === "function"
         ? (coordinator as { prototype?: Record<string, unknown> }).prototype
         : undefined;
@@ -211,10 +258,10 @@ function captureBinding(role: ModuleRole, loaded: unknown): unknown {
       }
       return coordinator;
     }
-    if (role === "sdk") return typeof exports.t === "function" ? exports.t : null;
-    if (role === "schema") return typeof exports.t === "function" ? exports.t : null;
+    if (role === "sdk") return typeof exported === "function" ? exported : null;
+    if (role === "schema") return typeof exported === "function" ? exported : null;
 
-    const sessionManager = asRecord(exports.claudeCodeSessionManager);
+    const sessionManager = asRecord(exported);
     if (
       !sessionManager
       || !(sessionManager.sessions instanceof Map)
