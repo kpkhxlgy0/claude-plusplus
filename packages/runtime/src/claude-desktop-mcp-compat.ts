@@ -108,9 +108,9 @@ const COMPATIBILITY_RECORDS: ReadonlyMap<string, CompatibilityRecord> = new Map<
       exportSlot: "o",
     }),
     session: Object.freeze({
-      basename: "index2.chunk-Doi9IfNA.js",
-      hash: "a7eaa600b023d2f7a589d0dd2437481b7ad8981ccea2b1f50101817cbbb584ff",
-      exportSlot: "n",
+      basename: "index.chunk-DDK-8_aa.js",
+      hash: "88635924c6c13ea2b18af186af877d86c720438c39f1fa0fac23cbc776329b68",
+      exportSlot: "claudeCodeSessionManager",
     }),
     schema: Object.freeze({
       basename: "index2.chunk-BCdS6ADu.js",

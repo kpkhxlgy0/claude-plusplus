@@ -62,9 +62,10 @@ Both fields are required. The handler:
 9. reads the target again and reports success only when the title matches exactly.
 
 Claude exposes the current Code session's `cliSessionId` UUID inside the conversation, while Desktop keys its local
-session manager by a separate `local_*` ID. Runtime 0.2.7 uses the context's existing Desktop ID to read and compare
-the caller snapshot inside the title operation. This avoids depending on private Map values, while the unique
-public-snapshot fallback preserves the approved ability to target another known session explicitly.
+session manager by a separate `local_*` ID. Runtime 0.2.7 introduced use of the context's existing Desktop ID to read
+and compare the caller snapshot inside the title operation. Runtime 0.2.8 corrects the `1.32885.1` CCD manager binding
+so that lookup reaches the manager that owns Desktop Code sessions. This avoids depending on private Map values,
+while the unique public-snapshot fallback preserves the approved ability to target another known session explicitly.
 
 `titleSource: "user"` is required because Desktop ignores an `auto` title update when a user title already exists.
 The tool description tells Claude to call it only after the user explicitly requests a title change.
@@ -149,7 +150,7 @@ which corresponds to Windows MSIX version `1.32885.1.0`.
 | `1.32885.1` | MCP coordinator | `index2.chunk-CxKk9JLq.js` | `80811026e6adf46b5f6d8c9d95303908f34668cde1c7aa47b6404ac2a7d52ae3` | `Ct` |
 | `1.32885.1` | Agent SDK factory | `index.chunk-mU2Ud8Q2.js` | `4599836d15846febabe6ba2d25ee5935d046b823174f4ce23ddb0670b54cf526` | `o` |
 | `1.32885.1` | JSON Schema converter | `index2.chunk-BCdS6ADu.js` | `e2a496d092c2e328b186425660fbf36a39e36b3ecadb4d5c8a2fae0ae9ac0ec1` | `t` |
-| `1.32885.1` | CCD session manager | `index2.chunk-Doi9IfNA.js` | `a7eaa600b023d2f7a589d0dd2437481b7ad8981ccea2b1f50101817cbbb584ff` | `n` |
+| `1.32885.1` | CCD session manager | `index.chunk-DDK-8_aa.js` | `88635924c6c13ea2b18af186af877d86c720438c39f1fa0fac23cbc776329b68` | `claudeCodeSessionManager` |
 
 The adapter requires both the hashes and runtime shapes:
 

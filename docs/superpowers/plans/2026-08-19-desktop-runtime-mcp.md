@@ -826,3 +826,22 @@ or Desktop/CLI identity bridge.
 - Update Claude Session Title to `0.1.1`, forward the unchanged handler context, and require Runtime `0.2.7`.
 - Verify strict RED/GREEN tests for the live private-value/snapshot mismatch, caller binding, other-session lookup,
   direct-key precedence, ambiguity, lifecycle, full builds, Windows packaging, and unchanged MCP/settings config.
+
+## Corrective Task 10: Bind the actual 1.32885.1 CCD manager (0.2.8)
+
+Installed Runtime `0.2.7` and Claude Session Title `0.1.1` were verified current in a newly restarted Claude Desktop
+`1.32885.1` process. The MCP tool was present, but the displayed Claude Code UUID failed. A second diagnostic call
+using the persisted Desktop key `local_bd418e1d-8ce5-4e13-a537-a5acbf968c94` also returned “session not found.” The
+persisted session record and Desktop log both mapped that key to the requested UUID before the calls. This rules out
+the UUID alias algorithm and proves that the title API was reading a manager that did not own the live Code session.
+
+Read-only bundle mapping found that the compatibility record's `index2.chunk-Doi9IfNA.js` export `n` is a similarly
+shaped cowork manager. The actual CCD singleton is `index.chunk-DDK-8_aa.js` export `claudeCodeSessionManager`, with
+SHA-256 `88635924c6c13ea2b18af186af877d86c720438c39f1fa0fac23cbc776329b68`.
+
+- Replace only the `1.32885.1` CCD manager module, hash, and export in the exact-build compatibility record.
+- Add a regression test that distinguishes the named CCD export from the old cowork export while preserving the
+  existing hash-, version-, and shape-locked fail-closed behavior.
+- Release the corrected binding as Claude++ `0.2.8`.
+- Keep Claude Session Title at `0.1.1`; its required MCP arguments remain `session_id` and `title`.
+- Keep scope limited to Claude Desktop and continue injecting in memory without writing MCP configuration.

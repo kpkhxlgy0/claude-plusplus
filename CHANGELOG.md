@@ -5,6 +5,18 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.2.8
+
+Release notes: [docs/releases/0.2.8.md](docs/releases/0.2.8.md)
+
+### Fixed
+
+- Corrected the Claude Desktop `1.32885.1` compatibility record to bind the real CCD
+  `claudeCodeSessionManager` instead of the similarly shaped cowork manager, so title lookups reach the manager that
+  owns Desktop Code sessions.
+- Kept Claude Session Title `0.1.1` compatible without changing its required `session_id` and `title` tool arguments
+  or writing Claude MCP configuration.
+
 ## 0.2.7
 
 Release notes: [docs/releases/0.2.7.md](docs/releases/0.2.7.md)

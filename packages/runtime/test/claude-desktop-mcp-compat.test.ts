@@ -106,9 +106,9 @@ const BUILDS = [
         `,
       },
       session: {
-        basename: "index2.chunk-Doi9IfNA.js",
-        hash: "a7eaa600b023d2f7a589d0dd2437481b7ad8981ccea2b1f50101817cbbb584ff",
-        exportSlot: "n",
+        basename: "index.chunk-DDK-8_aa.js",
+        hash: "88635924c6c13ea2b18af186af877d86c720438c39f1fa0fac23cbc776329b68",
+        exportSlot: "claudeCodeSessionManager",
         source: `
           const sessionManager = {
             sessions: new Map(),
@@ -116,7 +116,7 @@ const BUILDS = [
             updateSession: async () => {},
             applyMcpServersIfIdle: async () => {},
           };
-          module.exports = { n: sessionManager, marker: "session" };
+          module.exports = { claudeCodeSessionManager: sessionManager, marker: "session" };
         `,
       },
       schema: {
@@ -169,6 +169,64 @@ test("publishes bindings once for every exact supported Desktop build", async (t
         moduleInternals._load = originalLoad;
       }
     });
+  }
+});
+
+test("1.32885.1 ignores the shaped Doi manager and binds the DDK Claude Code manager", () => {
+  const build = BUILDS[1];
+  const fixture = createFixture(build);
+  const legacyRoot = mkdtempSync(join(tmpdir(), "claudepp-mcp-compat-legacy-session-"));
+  const legacyPath = join(legacyRoot, "index2.chunk-Doi9IfNA.js");
+  writeFileSync(legacyPath, `
+    const sessionManager = {
+      sessions: new Map(),
+      getSession: async () => null,
+      updateSession: async () => {},
+      applyMcpServersIfIdle: async () => {},
+    };
+    module.exports = { n: sessionManager, marker: "legacy-session" };
+  `, "utf8");
+  const originalLoad = moduleInternals._load;
+  const received: ClaudeDesktopMcpBindings[] = [];
+  const observer = installModuleObserver({
+    desktopVersion: build.version,
+    hashFile(filename) {
+      if (basename(filename) === basename(legacyPath)) {
+        return "a7eaa600b023d2f7a589d0dd2437481b7ad8981ccea2b1f50101817cbbb584ff";
+      }
+      return literalHash(build, filename);
+    },
+    onBindings(bindings) {
+      received.push(bindings);
+    },
+  });
+
+  try {
+    fixture.load("coordinator");
+    fixture.load("sdk");
+    fixture.load("schema");
+    const legacySession = requireFromTest(legacyPath) as Record<string, unknown>;
+
+    assert.equal(observer.status, "probing");
+    assert.equal(observer.bindings, null);
+    assert.deepEqual(received, []);
+
+    const claudeCodeSession = fixture.load("session");
+
+    assert.equal(observer.status, "supported");
+    assert.equal(received.length, 1);
+    assert.equal(
+      received[0]?.sessionManager,
+      claudeCodeSession[build.modules.session.exportSlot],
+    );
+    assert.notEqual(received[0]?.sessionManager, legacySession.n);
+    assert.equal(moduleInternals._load, originalLoad);
+  } finally {
+    observer.dispose();
+    fixture.dispose();
+    delete requireFromTest.cache[requireFromTest.resolve(legacyPath)];
+    rmSync(legacyRoot, { recursive: true, force: true });
+    moduleInternals._load = originalLoad;
   }
 });
 
