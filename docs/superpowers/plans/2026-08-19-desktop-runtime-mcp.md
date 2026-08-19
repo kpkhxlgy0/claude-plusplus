@@ -4,6 +4,8 @@
 
 **Goal:** Add a fail-closed, in-process Claude Desktop MCP host to Claude++ 0.2.6 and ship an independent Session Title Tweak at `D:\Unity\claude-session-title`.
 
+**Approved Codex++ divergence:** Codex++ manifest MCP uses external `command`/`args`/`env` and synchronizes a managed block into `~/.codex/config.toml`. The user explicitly approved Claude++'s deliberate divergence to Claude Desktop-only, in-process handler registration with revocable leases and an exact-build private adapter, with no Claude MCP or settings configuration writes; this is an intentional architectural difference, not an omitted config-sync step.
+
 **Architecture:** Claude++ observes four version-locked Claude Desktop CommonJS modules before the original Desktop entry finishes loading, then wraps the exported MCP coordinator's `createAllServers` boundary. Main Tweaks register handler-backed SDK MCP definitions in a process-wide lease registry; the host creates one SDK server instance per session and reconciles live queries through Desktop's existing idle/deferred update path. A separate Main-only title capability calls the exported Desktop session manager with an explicit session ID and verifies the persisted result.
 
 **Tech Stack:** TypeScript 5.9, Node.js 24 test runner, esbuild CommonJS Runtime bundle, Electron main process, Claude Agent SDK in-process MCP objects, CommonJS JavaScript Tweak.
