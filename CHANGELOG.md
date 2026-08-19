@@ -5,6 +5,17 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.2.7
+
+Release notes: [docs/releases/0.2.7.md](docs/releases/0.2.7.md)
+
+### Fixed
+
+- Used each title tool call's bound Desktop `local_*` session ID to validate the Claude Code CLI UUID exposed in
+  conversation, so an explicit current-session UUID reaches Desktop's actual title key.
+- Resolved other explicit CLI UUID targets through `getSession(...)` snapshots instead of relying on private session
+  Map values that can omit the alias at runtime.
+
 ## 0.2.6
 
 Release notes: [docs/releases/0.2.6.md](docs/releases/0.2.6.md)

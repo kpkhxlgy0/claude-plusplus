@@ -33,6 +33,9 @@ Claude++ therefore deliberately differs as follows:
 3. A version-locked compatibility adapter observes Claude Desktop's private MCP assembly boundary. An unsupported
    Desktop build disables injection without blocking Claude startup.
 4. The capability covers Claude Desktop only and carries higher maintenance cost when Desktop internals change.
+5. Runtime uses the MCP invocation's Desktop manager key to read and validate the caller's current Claude Code CLI
+   UUID only inside the title operation. Codex++ has no equivalent session-identity bridge; the user approved this
+   Claude-specific addition after the failed live UUID lookup was demonstrated.
 
 The user approved this divergence after these effects were explained.
 
@@ -49,15 +52,19 @@ Both fields are required. The handler:
 1. trims `session_id` and `title`;
 2. rejects an empty value;
 3. rejects a title longer than 200 UTF-16 code units, matching the current Desktop behavior;
-4. resolves `session_id` first as a Desktop session-manager key and then, when needed, as exactly one session record's
-   Claude Code `cliSessionId` UUID; zero or multiple matches are rejected;
-5. verifies the resolved target exists in Claude Desktop's session manager;
-6. calls the normal Desktop update path with `titleSource: "user"`;
-7. reads the target again and reports success only when the title matches exactly.
+4. resolves `session_id` first as a Desktop session-manager key;
+5. after an exact-key miss, reads `getSession(context.callerSessionId)` and uses the bound Desktop key only when that
+   caller snapshot's `cliSessionId` equals the explicit target;
+6. otherwise enumerates known manager keys and reads their public `getSession(...)` snapshots, requiring exactly one
+   matching `cliSessionId`; zero or multiple matches are rejected;
+7. verifies the resolved target exists in Claude Desktop's session manager;
+8. calls the normal Desktop update path with `titleSource: "user"`;
+9. reads the target again and reports success only when the title matches exactly.
 
 Claude exposes the current Code session's `cliSessionId` UUID inside the conversation, while Desktop keys its local
-session manager by a separate `local_*` ID. Accepting both forms lets the required explicit argument use the UUID
-Claude can actually supply without weakening the explicit-target contract.
+session manager by a separate `local_*` ID. Runtime 0.2.7 uses the context's existing Desktop ID to read and compare
+the caller snapshot inside the title operation. This avoids depending on private Map values, while the unique
+public-snapshot fallback preserves the approved ability to target another known session explicitly.
 
 `titleSource: "user"` is required because Desktop ignores an `auto` title update when a user title already exists.
 The tool description tells Claude to call it only after the user explicitly requests a title change.
@@ -87,7 +94,11 @@ interface TweakMcpRegistration {
 }
 
 interface ClaudeSessionTitlesApi {
-  setTitle(sessionId: string, title: string): Promise<ClaudeSessionTitleUpdate>;
+  setTitle(
+    sessionId: string,
+    title: string,
+    context?: Readonly<TweakMcpToolContext>,
+  ): Promise<ClaudeSessionTitleUpdate>;
 }
 
 interface ClaudeApi {
@@ -97,8 +108,9 @@ interface ClaudeApi {
 ```
 
 `api.mcp` and `api.claude.sessionTitles` are absent without their respective permissions and are never exposed to a
-Renderer lease. Tool handlers also receive a read-only caller context containing the Desktop caller session ID for
-auditing; targeting still comes exclusively from the required tool argument.
+Renderer lease. Tool handlers receive a read-only caller context containing the Desktop caller session ID. Targeting
+still comes from the required tool argument; the title API uses that internal caller ID to read and prove the explicit
+current-session UUID maps to the bound Desktop key without exposing the CLI UUID to unrelated MCP handlers.
 
 Server and tool names use lowercase letters, digits, `_`, and `-`. Server names must start with `claudepp_`, tools are
 unique within a server, and a server contains at least one tool. Each tool declares an object JSON Schema and returns
@@ -199,7 +211,7 @@ The independent project is `D:\Unity\claude-session-title` and follows the exist
 - compatibility validation script and tests
 - `LICENSE`
 
-Its manifest is Main-only, requires Claude++ `0.2.6`, and requests only `mcp` and
+Its manifest is Main-only, requires Claude++ `0.2.7`, and requests only `mcp` and
 `claude-session-title-write`.
 
 ## Verification
@@ -211,7 +223,8 @@ Automated coverage must prove:
 - exact compatibility probes and fail-closed mismatches;
 - per-session SDK instance creation without overwriting Desktop servers;
 - idle and running-session reconciliation and safe removal;
-- current and other session title changes, CLI-UUID-to-Desktop-key resolution, all validation branches,
+- current and other session title changes, caller-bound CLI-UUID resolution, public-snapshot cross-session lookup,
+  all validation branches,
   `titleSource: "user"`, and read-back checks;
 - Main API permission gating and retained-reference disposal;
 - Tweak schema, explicit-ID forwarding, stop cleanup, and absence of filesystem APIs;

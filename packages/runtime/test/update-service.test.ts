@@ -13,7 +13,7 @@ test("returns the safe default update configuration with no prior result", () =>
   const fixture = updateServiceFixture();
   try {
     const view = getUpdateConfigView(fixture.paths);
-    assert.equal(view.version, "0.2.6");
+    assert.equal(view.version, "0.2.7");
     assert.equal(view.autoUpdate, false);
     assert.equal(view.updateChannel, "stable");
     assert.equal(view.updateRepo, "kpkhxlgy0/claude-plusplus");
@@ -56,14 +56,14 @@ test("does not treat an equal-core prerelease as newer than the installed releas
     const result = await checkClaudePlusPlusUpdate({
       ...fixture.paths,
       requestReleases: async () => [{
-        tag_name: "v0.2.6-beta.1",
+        tag_name: "v0.2.7-beta.1",
         draft: false,
         prerelease: true,
       }],
       now: () => new Date("2026-08-13T00:00:00Z"),
     });
 
-    assert.equal(result.latestVersion, "0.2.6-beta.1");
+    assert.equal(result.latestVersion, "0.2.7-beta.1");
     assert.equal(result.updateAvailable, false);
   } finally {
     fixture.dispose();

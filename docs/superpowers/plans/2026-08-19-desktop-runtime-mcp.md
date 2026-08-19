@@ -756,6 +756,10 @@ session map, reject ambiguous matches, and perform update/read-back with the res
 lookup contract. A regression test must fail against the direct-lookup-only implementation and assert the exact
 lower-level `local_*` update target.
 
+**Superseded after installed testing:** the private-value scan above also failed against the live manager despite the
+persisted alias. Corrective Task 9 below replaces that boundary and extends the public API with optional caller
+context; the required MCP tool arguments remain unchanged.
+
 - [ ] **Step 5: Capture configuration baselines**
 
 Record SHA-256 or an explicit missing marker for:
@@ -802,3 +806,23 @@ git status --short
 Expected in `D:\Unity\claude-plusplus`: only intentional committed changes plus the untouched untracked
 `test-orange-cat.png`. Review every file under `D:\Unity\claude-session-title` and confirm no Claude configuration,
 temporary logs, package archives, or secrets are present.
+
+## Corrective Task 9: Caller-bound CLI UUID routing (0.2.7)
+
+The first installed `set_session_title` test exposed a second session identity: Claude returned its Claude Code UUID,
+but Desktop's title manager required the `local_*` key. Runtime 0.2.6 attempted to reverse-map private
+`manager.sessions` values. The exact UUID-to-local mapping existed in persisted state and Desktop logs before the tool
+call, yet that private-value scan returned no match in the installed Runtime.
+
+The user approved replacing that lookup boundary while retaining the required two-argument tool and explicit
+cross-session targeting. This is an additional approved Codex++ divergence: Codex++ has no in-process handler context
+or Desktop/CLI identity bridge.
+
+- Add an optional caller context to `ClaudeSessionTitlesApi.setTitle`.
+- Preserve exact Desktop-key precedence, then read `getSession(callerSessionId)` and revalidate its CLI UUID against
+  the explicit target before using the bound `local_*` key.
+- Preserve other explicit CLI UUID targets by enumerating known keys and comparing public `getSession(...)` snapshots;
+  keep zero/multiple matches fail-closed.
+- Update Claude Session Title to `0.1.1`, forward the unchanged handler context, and require Runtime `0.2.7`.
+- Verify strict RED/GREEN tests for the live private-value/snapshot mismatch, caller binding, other-session lookup,
+  direct-key precedence, ambiguity, lifecycle, full builds, Windows packaging, and unchanged MCP/settings config.

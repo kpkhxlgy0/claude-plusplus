@@ -192,7 +192,11 @@ export interface ClaudeSessionTitleUpdate {
 }
 
 export interface ClaudeSessionTitlesApi {
-  setTitle(sessionId: string, title: string): Promise<ClaudeSessionTitleUpdate>;
+  setTitle(
+    sessionId: string,
+    title: string,
+    context?: Readonly<TweakMcpToolContext>,
+  ): Promise<ClaudeSessionTitleUpdate>;
 }
 
 export interface ClaudeApi {

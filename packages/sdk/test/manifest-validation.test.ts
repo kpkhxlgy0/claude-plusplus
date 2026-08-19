@@ -405,7 +405,7 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
       return handle;
     },
   };
-  const mcpContext: TweakMcpToolContext = { callerSessionId: "caller_session" };
+  const mcpContext: TweakMcpToolContext = { callerSessionId: "local_caller_session" };
   const mcpCallResult: TweakMcpCallResult = {
     content: [{ type: "text", text: "Renamed local_session to Renamed" }],
   };
@@ -472,9 +472,10 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
     title: "Renamed",
   };
   const sessionTitles: ClaudeSessionTitlesApi = {
-    async setTitle(sessionId, title): Promise<ClaudeSessionTitleUpdate> {
+    async setTitle(sessionId, title, context): Promise<ClaudeSessionTitleUpdate> {
       assert.equal(sessionId, "local_session");
       assert.equal(title, "Renamed");
+      assert.equal(context, mcpContext);
       return sessionTitleUpdate;
     },
   };
@@ -586,7 +587,7 @@ test("public API contracts support a permission-scoped Claude host adapter", asy
   await registration?.unregister();
   assert.equal(mcpUnregistered, true);
   assert.equal(
-    await mainApi.claude?.sessionTitles?.setTitle("local_session", "Renamed"),
+    await mainApi.claude?.sessionTitles?.setTitle("local_session", "Renamed", mcpContext),
     sessionTitleUpdate,
   );
 });

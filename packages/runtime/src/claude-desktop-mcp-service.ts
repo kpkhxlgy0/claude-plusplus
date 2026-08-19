@@ -2,6 +2,7 @@ import type {
   ClaudeSessionTitlesApi,
   ClaudeSessionTitleUpdate,
   TweakManifest,
+  TweakMcpToolContext,
 } from "@claude-plusplus/sdk";
 import {
   installModuleObserver,
@@ -129,9 +130,9 @@ export class ClaudeDesktopMcpService {
     };
     const lease: ManagedSessionTitlesApiLease = {
       api: {
-        setTitle: async (sessionId, title) => {
+        setTitle: async (sessionId, title, context) => {
           assertLeaseActive();
-          return this.setSessionTitle(sessionId, title);
+          return this.setSessionTitle(sessionId, title, context);
         },
       },
       dispose: async () => {
@@ -267,6 +268,7 @@ export class ClaudeDesktopMcpService {
   private async setSessionTitle(
     sessionId: string,
     title: string,
+    context?: Readonly<TweakMcpToolContext>,
   ): Promise<ClaudeSessionTitleUpdate> {
     const targetSessionId = sessionId.trim();
     const nextTitle = title.trim();
@@ -281,13 +283,23 @@ export class ClaudeDesktopMcpService {
     let desktopSessionId = targetSessionId;
     let existing = await manager.getSession(desktopSessionId);
     if (!existing) {
-      const mappedSessionIds = findSessionIdsByCliSessionId(manager.sessions, targetSessionId);
-      if (mappedSessionIds.length > 1) {
+      const callerSessionId = context?.callerSessionId.trim();
+      if (callerSessionId) {
+        const caller = await manager.getSession(callerSessionId);
+        if (readStringProperty(caller, "cliSessionId") === targetSessionId) {
+          desktopSessionId = callerSessionId;
+          existing = caller;
+        }
+      }
+    }
+    if (!existing) {
+      const mappedSessions = await findSessionsByCliSessionId(manager, targetSessionId);
+      if (mappedSessions.length > 1) {
         throw new Error(`Session "${targetSessionId}" matched multiple Desktop sessions`);
       }
-      if (mappedSessionIds.length === 1) {
-        desktopSessionId = mappedSessionIds[0];
-        existing = await manager.getSession(desktopSessionId);
+      if (mappedSessions.length === 1) {
+        desktopSessionId = mappedSessions[0].sessionId;
+        existing = mappedSessions[0].session;
       }
     }
     if (!existing) throw new Error(`Session "${targetSessionId}" was not found`);
@@ -416,16 +428,22 @@ function asActiveSession(value: unknown): ActiveDesktopSession | null {
   return session as ActiveDesktopSession;
 }
 
-function findSessionIdsByCliSessionId(
-  sessions: ReadonlyMap<string, unknown>,
+async function findSessionsByCliSessionId(
+  manager: ClaudeDesktopMcpBindings["sessionManager"],
   cliSessionId: string,
-): string[] {
-  const matches: string[] = [];
-  for (const [sessionId, value] of sessions) {
-    if (value && typeof value === "object"
-      && (value as { cliSessionId?: unknown }).cliSessionId === cliSessionId) {
-      matches.push(sessionId);
+): Promise<Array<{ sessionId: string; session: unknown }>> {
+  const matches: Array<{ sessionId: string; session: unknown }> = [];
+  for (const sessionId of manager.sessions.keys()) {
+    const session = await manager.getSession(sessionId);
+    if (readStringProperty(session, "cliSessionId") === cliSessionId) {
+      matches.push({ sessionId, session });
     }
   }
   return matches;
+}
+
+function readStringProperty(value: unknown, property: string): string | null {
+  if (!value || typeof value !== "object") return null;
+  const result = (value as Record<string, unknown>)[property];
+  return typeof result === "string" && result.length > 0 ? result : null;
 }
