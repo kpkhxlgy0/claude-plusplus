@@ -456,6 +456,7 @@ test("uninstall reports fixed-root cleanup failures and still removes runtime st
     ]);
     assert.equal(existsSync(fixture.paths.runtime), false);
     assert.equal(existsSync(fixture.paths.stateFile), false);
+    assert.equal(existsSync(fixture.paths.shortcutFile), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

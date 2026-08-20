@@ -4,12 +4,19 @@ import {
   type ClaudePlusPlusPaths,
 } from "./paths.js";
 
+export interface WindowsCleanupFileSystem {
+  rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+}
+
+const defaultFileSystem: WindowsCleanupFileSystem = { rm };
+
 export async function cleanupWindowsManagedArtifacts(
   paths: ClaudePlusPlusPaths,
+  fileSystem: WindowsCleanupFileSystem = defaultFileSystem,
 ): Promise<string[]> {
   assertClaudePlusPlusStoreAppsPath(paths);
   try {
-    await rm(paths.storeApps, { recursive: true, force: true });
+    await fileSystem.rm(paths.storeApps, { recursive: true, force: true });
     return [];
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

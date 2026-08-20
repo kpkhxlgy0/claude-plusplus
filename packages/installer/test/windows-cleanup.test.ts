@@ -34,6 +34,35 @@ test("managed Windows cleanup removes only the fixed store-apps root", async () 
   }
 });
 
+test("managed cleanup reports fixed-root guidance when removal is locked", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-cleanup-locked-"));
+  try {
+    const paths = resolveClaudePlusPlusPaths({
+      APPDATA: join(root, "roaming"),
+      LOCALAPPDATA: join(root, "local"),
+      USERPROFILE: join(root, "profile"),
+    });
+    let removalCalls = 0;
+
+    const warnings = await cleanupWindowsManagedArtifacts(paths, {
+      rm: async (target, options) => {
+        removalCalls += 1;
+        assert.equal(target, paths.storeApps);
+        assert.deepEqual(options, { recursive: true, force: true });
+        throw Object.assign(new Error("locked managed mirror"), { code: "EBUSY" });
+      },
+    });
+
+    assert.equal(removalCalls, 1);
+    assert.deepEqual(warnings, [
+      `Could not remove Claude++ managed Store mirrors at ${paths.storeApps}. ` +
+      "Close Claude++ and rerun uninstall. locked managed mirror",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("managed cleanup rejects a substituted local child before removal", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-cleanup-boundary-"));
   try {
