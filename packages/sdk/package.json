@@ -1,6 +1,6 @@
 {
   "name": "@claude-plusplus/sdk",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Public types and helpers for Claude++ Tweak authors",
   "type": "module",
   "main": "dist/index.js",

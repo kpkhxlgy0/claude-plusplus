@@ -285,21 +285,38 @@ export class ClaudeDesktopMcpService {
     if (!existing) {
       const callerSessionId = context?.callerSessionId.trim();
       if (callerSessionId) {
-        const caller = await manager.getSession(callerSessionId);
-        if (readStringProperty(caller, "cliSessionId") === targetSessionId) {
-          desktopSessionId = callerSessionId;
-          existing = caller;
+        const callerRecord = manager.sessions.get(callerSessionId);
+        if (readStringProperty(callerRecord, "cliSessionId") === targetSessionId) {
+          const caller = await manager.getSession(callerSessionId);
+          const callerBindingIsCurrent = hasUniqueCliSessionBinding(
+            manager,
+            targetSessionId,
+            callerSessionId,
+          );
+          if (caller && callerBindingIsCurrent) {
+            desktopSessionId = callerSessionId;
+            existing = caller;
+          }
         }
       }
     }
     if (!existing) {
-      const mappedSessions = await findSessionsByCliSessionId(manager, targetSessionId);
-      if (mappedSessions.length > 1) {
+      const mappedSessionIds = findSessionIdsByCliSessionId(manager, targetSessionId);
+      if (mappedSessionIds.length > 1) {
         throw new Error(`Session "${targetSessionId}" matched multiple Desktop sessions`);
       }
-      if (mappedSessions.length === 1) {
-        desktopSessionId = mappedSessions[0].sessionId;
-        existing = mappedSessions[0].session;
+      if (mappedSessionIds.length === 1) {
+        const mappedSessionId = mappedSessionIds[0];
+        const mapped = await manager.getSession(mappedSessionId);
+        const mappedBindingIsCurrent = hasUniqueCliSessionBinding(
+          manager,
+          targetSessionId,
+          mappedSessionId,
+        );
+        if (mapped && mappedBindingIsCurrent) {
+          desktopSessionId = mappedSessionId;
+          existing = mapped;
+        }
       }
     }
     if (!existing) throw new Error(`Session "${targetSessionId}" was not found`);
@@ -428,18 +445,29 @@ function asActiveSession(value: unknown): ActiveDesktopSession | null {
   return session as ActiveDesktopSession;
 }
 
-async function findSessionsByCliSessionId(
+function findSessionIdsByCliSessionId(
   manager: ClaudeDesktopMcpBindings["sessionManager"],
   cliSessionId: string,
-): Promise<Array<{ sessionId: string; session: unknown }>> {
-  const matches: Array<{ sessionId: string; session: unknown }> = [];
-  for (const sessionId of manager.sessions.keys()) {
-    const session = await manager.getSession(sessionId);
+): string[] {
+  const matches: string[] = [];
+  for (const [sessionId, session] of manager.sessions) {
     if (readStringProperty(session, "cliSessionId") === cliSessionId) {
-      matches.push({ sessionId, session });
+      matches.push(sessionId);
     }
   }
   return matches;
+}
+
+function hasUniqueCliSessionBinding(
+  manager: ClaudeDesktopMcpBindings["sessionManager"],
+  cliSessionId: string,
+  expectedSessionId: string,
+): boolean {
+  const matches = findSessionIdsByCliSessionId(manager, cliSessionId);
+  if (matches.length > 1) {
+    throw new Error(`Session "${cliSessionId}" matched multiple Desktop sessions`);
+  }
+  return matches.length === 1 && matches[0] === expectedSessionId;
 }
 
 function readStringProperty(value: unknown, property: string): string | null {

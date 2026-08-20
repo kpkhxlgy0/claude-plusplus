@@ -207,7 +207,7 @@ test("repair restores a missing Runtime and a missing Loader", async () => {
     await repairClaudePlusPlus(fixture.options, fixture.deps);
 
     assert.equal(existsSync(join(fixture.paths.runtime, "main.js")), true);
-    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.2.8");
+    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.2.9");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

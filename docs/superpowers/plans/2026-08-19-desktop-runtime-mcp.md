@@ -845,3 +845,24 @@ SHA-256 `88635924c6c13ea2b18af186af877d86c720438c39f1fa0fac23cbc776329b68`.
 - Release the corrected binding as Claude++ `0.2.8`.
 - Keep Claude Session Title at `0.1.1`; its required MCP arguments remain `session_id` and `title`.
 - Keep scope limited to Claude Desktop and continue injecting in memory without writing MCP configuration.
+
+## Corrective Task 11: Correlate CLI UUIDs through raw DDK session records (0.2.9)
+
+An installed Runtime `0.2.8` call using the Desktop key
+`local_bd418e1d-8ce5-4e13-a537-a5acbf968c94` successfully renamed the session, proving the corrected CCD manager
+binding and normal title update path. The same session's Claude Code UUID
+`fa4ecabd-1857-4ab4-a747-fc90cd10c8d6` still failed to resolve.
+
+Read-only inspection of Claude Desktop `1.32885.1` found that the DDK manager's raw `sessions` Map record contains
+`cliSessionId`, while public `getSession(...)` returns `formatSessionForEvent(...)`, which omits that alias. Runtime
+`0.2.8` therefore discarded the only UUID-to-Desktop-key correlation available in the live manager.
+
+- Preserve an exact Desktop manager key as the highest-priority target.
+- For a Claude Code UUID, read `cliSessionId` only from raw DDK session records, using the bound caller record first
+  and then a process-wide unique-match fallback.
+- Reject multiple raw records with the same UUID alias.
+- Treat the raw Map only as a correlation index; after a unique match, call public `getSession(...)` to verify the
+  mapped Desktop key is still live before updating and reading the title back.
+- Release the correction as Claude++ `0.2.9`.
+- Keep Claude Session Title at `0.1.1` with minimum Runtime `0.2.7`; keep its required `session_id` and `title`
+  arguments unchanged.

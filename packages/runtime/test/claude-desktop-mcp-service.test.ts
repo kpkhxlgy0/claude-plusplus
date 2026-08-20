@@ -382,12 +382,13 @@ test("resolves a Claude CLI session UUID to the Desktop session key before updat
   ]);
 });
 
-test("uses caller context when the private session record omits its CLI UUID", async (t) => {
+test("uses the caller raw CLI UUID when the public session snapshot omits it", async (t) => {
   const fixture = createFixture();
   t.after(() => fixture.service.dispose());
   const callerSessionId = "local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
   const callerCliSessionId = "11111111-2222-4333-8444-555555555555";
   fixture.addSession(callerSessionId, {
+    cliSessionId: callerCliSessionId,
     query: null,
     isRunning: false,
     activeMcpServers: {},
@@ -395,7 +396,6 @@ test("uses caller context when the private session record omits its CLI UUID", a
   });
   fixture.setSessionSnapshot(callerSessionId, {
     sessionId: callerSessionId,
-    cliSessionId: callerCliSessionId,
     query: null,
     isRunning: false,
     activeMcpServers: {},
@@ -414,7 +414,66 @@ test("uses caller context when the private session record omits its CLI UUID", a
   ]]);
 });
 
-test("uses the caller binding before scanning unrelated session snapshots", async (t) => {
+test("fails closed when the caller raw CLI UUID changes during session verification", async (t) => {
+  const callerSessionId = "local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const callerCliSessionId = "11111111-2222-4333-8444-555555555555";
+  const replacementCliSessionId = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+  const fixture = createFixture({
+    onGetSession(sessionId, session) {
+      if (sessionId === callerSessionId && session) {
+        session.cliSessionId = replacementCliSessionId;
+      }
+    },
+  });
+  t.after(() => fixture.service.dispose());
+  fixture.addSession(callerSessionId, {
+    cliSessionId: callerCliSessionId,
+    query: null,
+    isRunning: false,
+    activeMcpServers: {},
+    title: "Old title",
+  });
+  fixture.setSessionSnapshot(callerSessionId, {
+    sessionId: callerSessionId,
+    title: "Old title",
+  });
+  const lease = fixture.service.createSessionTitlesApiLease();
+
+  await assert.rejects(
+    () => lease.api.setTitle(callerCliSessionId, "New title", { callerSessionId }),
+    /not found/i,
+  );
+  assert.deepEqual(fixture.updates, []);
+});
+
+test("rejects the caller CLI UUID when another raw session has the same alias", async (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.service.dispose());
+  const callerSessionId = "local_caller";
+  const targetCliSessionId = "11111111-2222-4333-8444-555555555555";
+  for (const sessionId of [callerSessionId, "local_duplicate"]) {
+    fixture.addSession(sessionId, {
+      cliSessionId: targetCliSessionId,
+      query: null,
+      isRunning: false,
+      activeMcpServers: {},
+      title: "Old title",
+    });
+  }
+  fixture.setSessionSnapshot(callerSessionId, {
+    sessionId: callerSessionId,
+    title: "Old title",
+  });
+  const lease = fixture.service.createSessionTitlesApiLease();
+
+  await assert.rejects(
+    () => lease.api.setTitle(targetCliSessionId, "New title", { callerSessionId }),
+    /multiple Desktop sessions/i,
+  );
+  assert.deepEqual(fixture.updates, []);
+});
+
+test("resolves the caller raw binding without reading an unrelated public snapshot", async (t) => {
   const fixture = createFixture({ getSessionErrorFor: "local_broken" });
   t.after(() => fixture.service.dispose());
   const callerSessionId = "local_caller";
@@ -426,6 +485,7 @@ test("uses the caller binding before scanning unrelated session snapshots", asyn
     title: "Broken title",
   });
   fixture.addSession(callerSessionId, {
+    cliSessionId: callerCliSessionId,
     query: null,
     isRunning: false,
     activeMcpServers: {},
@@ -433,7 +493,6 @@ test("uses the caller binding before scanning unrelated session snapshots", asyn
   });
   fixture.setSessionSnapshot(callerSessionId, {
     sessionId: callerSessionId,
-    cliSessionId: callerCliSessionId,
     title: "Old title",
   });
   const lease = fixture.service.createSessionTitlesApiLease();
@@ -446,31 +505,36 @@ test("uses the caller binding before scanning unrelated session snapshots", asyn
     callerSessionId,
     { title: "New title", titleSource: "user" },
   ]]);
+  assert.equal(fixture.getSessionReads.includes("local_broken"), false);
 });
 
-test("resolves another session CLI UUID through public session snapshots", async (t) => {
+test("resolves another session CLI UUID through raw session records", async (t) => {
   const fixture = createFixture();
   t.after(() => fixture.service.dispose());
   const callerSessionId = "local_caller";
   const otherSessionId = "local_other";
   const callerCliSessionId = "11111111-2222-4333-8444-555555555555";
   const otherCliSessionId = "66666666-7777-4888-9999-aaaaaaaaaaaa";
-  for (const sessionId of [callerSessionId, otherSessionId]) {
-    fixture.addSession(sessionId, {
-      query: null,
-      isRunning: false,
-      activeMcpServers: {},
-      title: "Old title",
-    });
-  }
+  fixture.addSession(callerSessionId, {
+    cliSessionId: callerCliSessionId,
+    query: null,
+    isRunning: false,
+    activeMcpServers: {},
+    title: "Old title",
+  });
+  fixture.addSession(otherSessionId, {
+    cliSessionId: otherCliSessionId,
+    query: null,
+    isRunning: false,
+    activeMcpServers: {},
+    title: "Old title",
+  });
   fixture.setSessionSnapshot(callerSessionId, {
     sessionId: callerSessionId,
-    cliSessionId: callerCliSessionId,
     title: "Old title",
   });
   fixture.setSessionSnapshot(otherSessionId, {
     sessionId: otherSessionId,
-    cliSessionId: otherCliSessionId,
     title: "Old title",
   });
   const lease = fixture.service.createSessionTitlesApiLease();
@@ -485,6 +549,77 @@ test("resolves another session CLI UUID through public session snapshots", async
   ]]);
 });
 
+test("fails closed when a unique raw CLI UUID changes during session verification", async (t) => {
+  const desktopSessionId = "local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const targetCliSessionId = "11111111-2222-4333-8444-555555555555";
+  const replacementCliSessionId = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+  const fixture = createFixture({
+    onGetSession(sessionId, session) {
+      if (sessionId === desktopSessionId && session) {
+        session.cliSessionId = replacementCliSessionId;
+      }
+    },
+  });
+  t.after(() => fixture.service.dispose());
+  fixture.addSession(desktopSessionId, {
+    cliSessionId: targetCliSessionId,
+    query: null,
+    isRunning: false,
+    activeMcpServers: {},
+    title: "Old title",
+  });
+  fixture.setSessionSnapshot(desktopSessionId, {
+    sessionId: desktopSessionId,
+    title: "Old title",
+  });
+  const lease = fixture.service.createSessionTitlesApiLease();
+
+  await assert.rejects(
+    () => lease.api.setTitle(targetCliSessionId, "New title"),
+    /not found/i,
+  );
+  assert.deepEqual(fixture.updates, []);
+});
+
+test("rejects a CLI UUID when a duplicate raw alias appears during session verification", async (t) => {
+  const desktopSessionId = "local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const duplicateSessionId = "local_ffffffff-eeee-4ddd-8ccc-bbbbbbbbbbbb";
+  const targetCliSessionId = "11111111-2222-4333-8444-555555555555";
+  const fixture = createFixture({
+    onGetSession(sessionId, _session, sessions) {
+      if (sessionId !== desktopSessionId || sessions.has(duplicateSessionId)) return;
+      sessions.set(duplicateSessionId, {
+        sessionId: duplicateSessionId,
+        cliSessionId: targetCliSessionId,
+        query: null,
+        isRunning: false,
+        activeMcpServers: {},
+        mcpServersDirty: false,
+        title: "Duplicate title",
+      });
+    },
+  });
+  t.after(() => fixture.service.dispose());
+  fixture.addSession(desktopSessionId, {
+    cliSessionId: targetCliSessionId,
+    query: null,
+    isRunning: false,
+    activeMcpServers: {},
+    title: "Old title",
+  });
+  fixture.setSessionSnapshot(desktopSessionId, {
+    sessionId: desktopSessionId,
+    title: "Old title",
+  });
+  const lease = fixture.service.createSessionTitlesApiLease();
+
+  await assert.rejects(
+    () => lease.api.setTitle(targetCliSessionId, "New title"),
+    /multiple Desktop sessions/i,
+  );
+  assert.deepEqual(fixture.updates, []);
+});
+
 test("rejects a CLI session UUID that maps to multiple Desktop sessions", async (t) => {
   const fixture = createFixture();
   t.after(() => fixture.service.dispose());
@@ -494,6 +629,10 @@ test("rejects a CLI session UUID that maps to multiple Desktop sessions", async 
       query: null,
       isRunning: false,
       activeMcpServers: {},
+      title: "Old title",
+    });
+    fixture.setSessionSnapshot(sessionId, {
+      sessionId,
       title: "Old title",
     });
   }
@@ -683,6 +822,11 @@ function createFixture(options: {
   factoryError?: Error;
   factoryErrorAfter?: number;
   getSessionErrorFor?: string;
+  onGetSession?: (
+    sessionId: string,
+    session: FakeSession | undefined,
+    sessions: Map<string, FakeSession>,
+  ) => void;
   readBackTitle?: string;
   updateError?: Error;
 } = {}) {
@@ -750,6 +894,7 @@ function createFixture(options: {
         const sessionId = String(rawSessionId);
         getSessionReads.push(sessionId);
         if (sessionId === options.getSessionErrorFor) throw new Error("session read failed");
+        options.onGetSession?.(sessionId, sessions.get(sessionId), sessions);
         return sessionSnapshots.get(sessionId) ?? sessions.get(sessionId) ?? null;
       },
       updateSession: async (rawSessionId, rawUpdate) => {

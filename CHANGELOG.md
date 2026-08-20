@@ -5,6 +5,18 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.2.9
+
+Release notes: [docs/releases/0.2.9.md](docs/releases/0.2.9.md)
+
+### Fixed
+
+- Restored Claude Code UUID targeting on Claude Desktop `1.32885.1` by correlating the UUID through the DDK
+  manager's raw session record, whose public `getSession(...)` snapshot omits `cliSessionId`.
+- Kept exact Desktop keys authoritative, rejected duplicate UUID aliases, and validated a uniquely mapped target
+  through `getSession(...)` before updating its title.
+- Kept Claude Session Title `0.1.1` and its Runtime `0.2.7` minimum unchanged.
+
 ## 0.2.8
 
 Release notes: [docs/releases/0.2.8.md](docs/releases/0.2.8.md)
