@@ -36,6 +36,55 @@ test("explicit enable creates logon and five-minute tasks through one generated 
   }
 });
 
+test("repeated enable removes every known task variant before recreating the current pair", () => {
+  const fixture = watcherFixture();
+  try {
+    const calls: string[][] = [];
+    const first = installWatcher(fixture.options, (_file, args) => {
+      calls.push(args);
+    });
+    calls.length = 0;
+    const second = installWatcher(fixture.options, (_file, args) => {
+      calls.push(args);
+    });
+
+    const firstCreate = calls.findIndex((args) => args[0] === "/Create");
+    assert.notEqual(firstCreate, -1);
+    const deletedBeforeCreate = calls
+      .slice(0, firstCreate)
+      .filter((args) => args[0] === "/Delete")
+      .map(taskNameFromArgs)
+      .sort();
+    const deletedAfterCreate = calls
+      .slice(firstCreate)
+      .filter((args) => args[0] === "/Delete");
+    const created = calls
+      .filter((args) => args[0] === "/Create")
+      .map(taskNameFromArgs)
+      .sort();
+
+    assert.equal(first, "scheduled-task");
+    assert.equal(second, "scheduled-task");
+    assert.deepEqual(deletedBeforeCreate, [
+      "\\claude-plusplus-watcher",
+      "\\claude-plusplus-watcher-daily",
+      "\\claude-plusplus-watcher-hourly",
+      "\\claude-plusplus-watcher-interval",
+      "claude-plusplus-watcher",
+      "claude-plusplus-watcher-daily",
+      "claude-plusplus-watcher-hourly",
+      "claude-plusplus-watcher-interval",
+    ]);
+    assert.equal(deletedAfterCreate.length, 0);
+    assert.deepEqual(created, [
+      "claude-plusplus-watcher",
+      "claude-plusplus-watcher-interval",
+    ].sort());
+  } finally {
+    fixture.dispose();
+  }
+});
+
 test("disable removes current and legacy Watcher tasks plus the command script", () => {
   const fixture = watcherFixture();
   try {
@@ -84,6 +133,12 @@ test("watcher command accepts exactly enable, disable, and status", async () => 
     fixture.dispose();
   }
 });
+
+function taskNameFromArgs(args: string[]): string {
+  const taskNameIndex = args.indexOf("/TN") + 1;
+  assert.notEqual(taskNameIndex, 0);
+  return args[taskNameIndex];
+}
 
 function watcherFixture() {
   const root = mkdtempSync(join(tmpdir(), "claudepp-watcher-"));

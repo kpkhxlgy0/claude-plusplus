@@ -72,18 +72,17 @@ Current automated coverage proves that:
 
 - ordinary install and maintenance do not create or silently enable Watcher tasks;
 - one explicit enable creates the command script, logon task, and five-minute task;
+- repeated enable removes every current and legacy task variant before recreating only the current task pair;
 - explicit disable removes current and legacy Watcher artifacts;
 - maintenance preserves an enabled Watcher across a new Claude package;
 - Watcher-mode repair is a no-op while the managed installation is current;
-- Doctor accepts an intentionally absent Watcher and reports `optional; not installed`.
+- Doctor accepts an intentionally absent Watcher and reports `optional; not installed`;
+- Doctor rejects a persisted expected Watcher whose artifacts are incomplete and reports `configured but incomplete`.
 
-Source inspection confirms two additional lifecycle behaviors that do not yet have focused automated regression
-coverage: `installWatcher(...)` removes the current and legacy tasks before recreating the two current tasks, making
-repeated enable idempotent; and Doctor fails its Watcher check with `configured but incomplete` when persisted state
-expects a Watcher but the inspected artifacts are incomplete. The missing focused tests for repeated-enable
-idempotence and incomplete-expected Doctor rejection are explicit test gaps; this documentation-only decision does
-not add them.
+The repeated-enable and incomplete-expected Doctor contracts were initially source-inspected test gaps. Follow-up
+regression tests added on 2026-08-20 now exercise both behaviors. Each test was mutation-checked against the specific
+regression it protects before the complete 350-test suite passed.
 
 This decision does not require a Runtime, SDK, Loader, installer-behavior, version, or release-package change. Its
-implementation work is limited to preserving the existing behavior and recording the approved divergence in the
-active design and implementation plan.
+implementation work is limited to preserving the existing behavior, recording the approved divergence, and adding
+focused regression coverage.

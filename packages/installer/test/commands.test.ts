@@ -354,6 +354,28 @@ test("status, debug, doctor, and launch expose the managed installation safely",
   }
 });
 
+test("doctor rejects a configured Watcher whose artifacts are incomplete", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const state = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(state);
+    writeFileSync(fixture.paths.stateFile, JSON.stringify({ ...state, watcher: "scheduled-task" }));
+    assert.equal(existsSync(join(fixture.paths.roamingRoot, "bin", "watcher.cmd")), false);
+
+    const doctor = await doctorClaudePlusPlus(fixture.paths, { discover: fixture.deps.discover });
+    const watcherCheck = doctor.checks.find((check) => check.name === "watcher");
+
+    assert.deepEqual(watcherCheck, {
+      name: "watcher",
+      ok: false,
+      detail: "configured but incomplete",
+    });
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("status and doctor reject a managed app whose integrity fuse is enabled", async () => {
   const fixture = await createFixture();
   try {

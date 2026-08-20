@@ -5,9 +5,9 @@
 **Goal:** Permanently record and verify Claude++'s approved decision to keep the Windows auto-repair Watcher opt-in.
 
 **Architecture:** Preserve the existing installer, CLI, state, Doctor, and scheduled-task behavior without source-code
-changes. Add the approved design and this active plan as the durable divergence record. Use the existing focused tests
-and full suite for the behavior they cover, inspect source for the uncovered repeated-enable and incomplete-expected
-Doctor contracts, and record those two focused test gaps. This documentation-only decision does not add tests.
+changes. Add the approved design and this active plan as the durable divergence record. The initial documentation-only
+task recorded repeated-enable and incomplete-expected Doctor coverage as explicit gaps; the approved follow-up closes
+both gaps with focused regression tests while preserving production behavior.
 
 **Tech Stack:** Markdown, TypeScript, Node.js 24+, Node.js built-in test runner, Windows scheduled tasks.
 
@@ -91,10 +91,12 @@ node --import tsx --test `
   test/repository-shape.test.mjs
 ```
 
-Expected: exit code 0. The output must include passing coverage for a fresh install recording `watcher: "none"`,
+Expected for the initial documentation task: exit code 0. The output must include passing coverage for a fresh install
+recording `watcher: "none"`,
 maintenance preserving an enabled Watcher, one explicit task creation and explicit removal, Watcher-mode refresh
-failing closed, and Doctor reporting `optional; not installed`. Repeated-enable idempotence and Doctor rejection of an
-incomplete expected Watcher remain source-inspected behaviors without focused automated regression coverage.
+failing closed, and Doctor reporting `optional; not installed`. At this initial task boundary, repeated-enable
+idempotence and Doctor rejection of an incomplete expected Watcher remained source-inspected behaviors without
+focused automated regression coverage.
 
 - [x] **Step 4: Run the complete repository test suite**
 
@@ -102,7 +104,8 @@ incomplete expected Watcher remain source-inspected behaviors without focused au
 npm test
 ```
 
-Expected: exit code 0 with 348 tests passing and zero failures, skips, or cancellations.
+Expected for the initial documentation task: exit code 0 with 348 tests passing and zero failures, skips, or
+cancellations.
 
 - [x] **Step 5: Verify documentation-only scope**
 
@@ -120,10 +123,11 @@ if ($trailingWhitespace) {
 git status --short
 ```
 
-Expected: `git diff --check` and the trailing-whitespace check emit no output. Status lists only the two new Markdown
-files; no Runtime, SDK, Loader, installer, test, version, package, Store, or release file is modified.
+Expected for the initial documentation task: `git diff --check` and the trailing-whitespace check emit no output.
+Status lists only the two new Markdown files; no Runtime, SDK, Loader, installer, test, version, package, Store, or
+release file is modified.
 
-- [ ] **Step 6: Commit only after explicit authorization**
+- [x] **Step 6: Commit only after explicit authorization**
 
 ```powershell
 git add -- `
@@ -134,3 +138,26 @@ git commit -m "docs: record opt-in Watcher divergence"
 
 Expected: one documentation-only commit containing exactly the design and plan. Do not push, tag, or publish unless
 the user separately authorizes those actions.
+
+Completed in commit `67608e3635e73c7d0f7bc0bd5ec2140e29f19a46`; the user separately authorized its push to
+`origin/master`.
+
+---
+
+### Follow-up: Close the focused Watcher regression gaps
+
+The user approved a test-only follow-up on 2026-08-20. It adds no Runtime, SDK, Loader, installer-behavior, version,
+package, Store, or release change.
+
+- [x] Add focused coverage proving a repeated enable removes every current and legacy task variant before recreating
+  only the current logon and five-minute tasks.
+- [x] Mutation-check the repeated-enable test by temporarily skipping pre-create cleanup, observe the expected failure,
+  and restore the production source.
+- [x] Add focused coverage proving Doctor rejects persisted `scheduled-task` state when Watcher artifacts are
+  incomplete and reports `configured but incomplete`.
+- [x] Mutation-check the Doctor test by temporarily accepting an incomplete expected Watcher, observe the expected
+  failure, and restore the production source.
+- [x] Run the focused installer tests with 23 passing and zero failures, skips, cancellations, or todos.
+- [x] Run the complete repository suite with 350 passing and zero failures, skips, cancellations, or todos.
+- [x] Verify the final source diff contains only the two focused test files and these two divergence records.
+- [x] Commit the follow-up only after explicit user authorization. Do not push unless separately authorized.
