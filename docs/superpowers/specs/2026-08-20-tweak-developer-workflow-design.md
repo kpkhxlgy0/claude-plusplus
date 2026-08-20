@@ -1,0 +1,242 @@
+# Tweak Developer Workflow Design
+
+**Date:** 2026-08-20
+**Status:** Approved for implementation planning
+**Reference:** Installed Codex++ v1.0.0 source under `C:\Users\Admin\.codex-plusplus\source`
+
+## Purpose
+
+Give Claude++ Tweak authors the same essential create, validate, link, watch, and documentation workflow available in Codex++, adapted to Claude++'s stricter manifest rules, Windows-only host, public Claude APIs, and in-process MCP model.
+
+## Goals
+
+- Add `create-tweak`, `validate-tweak`, and `dev` CLI commands with familiar Codex++ command shapes.
+- Make the existing Claude++ SDK validator the single manifest-validation authority.
+- Generate immediately runnable CommonJS examples for Renderer, Main, and both-process Tweaks.
+- Provide a containment-checked Windows Junction workflow for local development.
+- Validate on source changes and deterministically signal the existing Runtime reload watcher.
+- Document the complete path from first scaffold through validation, local development, bundling, debugging, and distribution.
+- Keep generated code limited to Claude++ public APIs and permissions.
+
+## Non-goals
+
+- Publishing `@claude-plusplus/sdk` to npm or another registry.
+- Generating TypeScript, JSX, React, or bundler projects by default.
+- Adding a graphical project wizard or Tweak Store publishing automation.
+- Adding Codex-only Owl, React-fiber, native window/view/CDP/native-host APIs.
+- Adding external stdio MCP declarations or writing Claude MCP configuration.
+- Adding macOS/Linux development-link support in this Windows-only release.
+- Changing Runtime lifecycle ordering or introducing a second Runtime watcher.
+
+## CLI Surface
+
+### Create
+
+```text
+claudeplusplus create-tweak <target>
+  [--id <id>]
+  [--name <display-name>]
+  [--repo <owner/repo>]
+  [--scope renderer|main|both]
+  [--force]
+```
+
+The target argument is required. Unknown flags, missing option values, duplicate value options, and an invalid scope fail before files are written.
+
+If the target does not exist, create it. If it exists, it must be empty and `--force` must be present. `--force` never overwrites a non-empty directory or an existing file.
+
+Defaults derive from the target directory name:
+
+- slug: lowercase target basename with unsupported runs replaced by `-`.
+- id: `com.example.<slug>`.
+- name: title-cased slug.
+- repository: `example/<slug>`.
+- version: `0.1.0`.
+- description: `A Claude++ Tweak.`.
+- scope: `both`.
+- main: `index.js`.
+
+Before any write, construct the complete manifest and pass it to `validateTweakManifest`. A generated manifest that fails SDK validation aborts without a partial project.
+
+The command creates exactly:
+
+```text
+<target>/
+  manifest.json
+  index.js
+  package.json
+  README.md
+```
+
+### Validate
+
+```text
+claudeplusplus validate-tweak [target]
+```
+
+The default target is `.`. A target may be a Tweak directory or a manifest file. A directory resolves to `<target>/manifest.json`.
+
+Validation performs these checks in order:
+
+1. Target and manifest exist.
+2. Manifest is valid JSON.
+3. `@claude-plusplus/sdk.validateTweakManifest` succeeds.
+4. The selected entry exists: explicit `manifest.main`, otherwise `index.js`, `index.cjs`, then `index.mjs`.
+
+All SDK errors and warnings are printed with their manifest paths. Missing entries are validation errors. Warnings do not fail the command. Any error causes a non-zero CLI exit through the existing top-level error path.
+
+### Dev
+
+```text
+claudeplusplus dev [target]
+  [--name <link-name>]
+  [--replace]
+  [--no-watch]
+```
+
+The default target is `.`. Dev validates the source directory and entry before touching the live Tweaks directory.
+
+The default link name is `manifest.id`. An explicit `--name` must use the same character set as a manifest id: letters, numbers, dots, underscores, and dashes. It cannot be empty, `.` or `..`, contain a path separator, or resolve anywhere except an immediate child of `paths.tweaks`.
+
+On Windows, the link is a directory Junction from `<paths.tweaks>/<link-name>` to the absolute source directory.
+
+Collision behavior:
+
+- An existing Junction to the same source is idempotent.
+- An existing Junction to another source requires `--replace`.
+- `--replace` removes only that contained Junction and creates the new one.
+- A real file or directory is never removed or replaced.
+- A malformed, broken, or escaping reparse target is rejected rather than followed.
+
+After the link is ready, write `.claudepp-dev-reload` directly under `paths.tweaks`. This root-level marker deliberately differs from Codex++'s marker-inside-link design so Windows reload signaling does not depend on Junction event propagation.
+
+Without `--no-watch`, recursively watch the source directory. Ignore `node_modules` and changes to generated reload-marker names. Debounce events by 100 milliseconds. For each settled change:
+
+1. Re-read and validate the manifest and entry.
+2. On success, update the root-level reload marker and print a valid timestamp/path message.
+3. On failure, print the validation failure and do not update the root marker.
+
+SIGINT and SIGTERM cancel the pending timer, close the watcher, remove installed signal handlers, and resolve normally. The command does not delete the development Junction on exit.
+
+## Generated Project
+
+### Manifest permissions
+
+Permission defaults match only APIs used by the generated template:
+
+- `renderer`: `settings`.
+- `main`: `ipc`.
+- `both`: `settings`, `ipc`.
+
+No template requests `network`, `claude-sessions`, startup environment, Claude Code settings, MCP, or session-title write access without demonstrating and documenting that capability.
+
+### CommonJS templates
+
+Renderer scope registers a Settings page and renders text using DOM APIs.
+
+Main scope logs startup and registers a namespaced `ping` IPC handler.
+
+Both scope branches on `api.process`: Main registers the handler; Renderer registers a Settings page with a button that invokes it. Every template provides a `stop()` location and retains cleanup handles where an API requires explicit disposal.
+
+Templates use `module.exports`; they contain no raw TypeScript, ESM import/export, Codex global, Owl, React, native-host, or external MCP configuration.
+
+### package.json
+
+The generated package is private, CommonJS, and contains:
+
+```json
+{
+  "scripts": {
+    "validate": "claudeplusplus validate-tweak .",
+    "dev": "claudeplusplus dev ."
+  }
+}
+```
+
+The official npm registry currently returns E404 for `@claude-plusplus/sdk`. The scaffold therefore does not generate an unresolvable npm dependency. Plain JavaScript Tweaks run without the SDK package. TypeScript documentation explains how to install the SDK package from the locally installed Claude++ source until a separate publication project is approved.
+
+### README
+
+The generated README describes:
+
+- Manifest and entry files.
+- `npm run validate`.
+- `npm run dev` and `--no-watch`.
+- The live `%APPDATA%\claude-plusplus\tweaks` destination.
+- Restart guidance if Renderer changes cannot apply to an existing Claude Session.
+- The requirement to clean resources in `stop()`.
+
+## Shared Validation and Packaging
+
+The installer package adds `@claude-plusplus/sdk` as a workspace dependency and imports `validateTweakManifest` from it. No duplicate validator is introduced.
+
+The portable Windows package cannot retain workspace Junctions in a ZIP. Packaging therefore materializes `@claude-plusplus/sdk` as a real directory under the packaged `node_modules/@claude-plusplus/sdk`, containing its package metadata and built `dist`. Other workspace links continue to be removed as today.
+
+The package smoke test verifies that the packaged CLI can run `create-tweak`, `validate-tweak`, and one-shot `dev --no-watch` using the portable Node runtime without system Node/npm resolution. The smoke harness redirects `APPDATA`, `LOCALAPPDATA`, and `USERPROFILE` to a temporary test root before `dev`, so it cannot create a Junction or marker in the user's live Claude++ directories.
+
+## Documentation Structure
+
+Retain `docs/tweak-authoring.md` as the Claude-specific advanced capability guide and add:
+
+```text
+docs/tweaks/
+  README.md
+  getting-started.md
+  manifest.md
+  runtime-lifecycle.md
+  api-reference.md
+  typescript-and-bundling.md
+  distribution-debugging.md
+```
+
+The documentation index links every page and the top-level README links the index.
+
+Content requirements:
+
+- Getting Started: directory layout, create/validate/dev commands, all three process scopes, entry resolution.
+- Manifest: every SDK field, Claude-only permission/declaration coupling, `minRuntime`, Store metadata, and explicit scope guidance.
+- Runtime lifecycle: Main/Renderer loading, start/stop, lease revocation, hot reload order, cleanup checklist, storage locations, Safe Mode.
+- API reference: public SDK interfaces grouped by common, Renderer, Main, and permission-gated capability.
+- TypeScript and bundling: local SDK source installation, browser-vs-Node esbuild targets, CommonJS output, both-process constraints.
+- Distribution/debugging: release checks, reviewed Store commits, log locations, DevTools/Main logs, compatibility and cleanup rules.
+- Advanced guide: existing startup environment, Claude Code settings, in-process MCP, and session-title material remains authoritative and linked rather than duplicated inconsistently.
+
+Packaging copies the complete `docs/tweaks` directory in addition to `docs/tweak-authoring.md`.
+
+## Error Handling and Security
+
+- File writes occur only after manifest and target preflight succeeds.
+- Create never overwrites non-empty content.
+- Dev link targets and link destinations are resolved and containment-checked before removal or creation.
+- `--replace` applies only to a contained reparse point; it never removes a real directory.
+- Source validation errors never cause a live marker update.
+- The CLI does not execute Tweak source during create, validation, or link setup.
+- Main Tweaks remain trusted local Node.js code; manifest permissions constrain Claude++ API leases but are not an operating-system sandbox.
+- Documentation does not imply that Renderer Tweaks have Node `require`, that external MCP configuration is supported, or that private Claude internals are stable public APIs.
+
+## Test Requirements
+
+Tests follow red-green-refactor and cover:
+
+- Argument parsing for every command, option, default, missing value, duplicate option, unknown flag, and invalid scope.
+- Create output for Renderer, Main, and both scopes, including exact permissions and executable templates.
+- Default metadata derivation and explicit metadata overrides.
+- Refusal of existing files, non-empty directories, and empty directories without `--force`.
+- No partial scaffold when generated manifest validation fails.
+- Validation of a generated Tweak, a direct manifest path, fallback entries, warnings, invalid JSON, SDK-invalid fields, and missing explicit/fallback entries.
+- Dev creation of a Windows Junction at the manifest id.
+- Idempotent same-source linking, wrong-source refusal, `--replace`, real-directory refusal, broken/escaping link refusal, and link-name containment.
+- `--no-watch` exits after linking and marker creation.
+- Injected watcher tests prove debounce, `node_modules` filtering, valid marker updates, invalid no-update behavior, and signal cleanup without waiting on real filesystem timing.
+- Existing Runtime tests continue to prove serialized Main/Renderer reload and lease revocation.
+- Installer builds with the SDK dependency and the portable package materializes a resolvable SDK package.
+- Documentation/package tests prove every linked authoring document is included in the release payload.
+
+## Approved Differences from Codex++
+
+- `dev --name` is restricted and containment-checked; Codex++ accepts an arbitrary name.
+- Reload markers live in the Tweaks root rather than inside the linked source.
+- Generated projects omit the currently unpublished npm SDK dependency and default to runnable CommonJS.
+- Development links are Windows Junctions only in this release.
+- Claude++ keeps its stricter validator, Claude-specific permissions, in-process MCP leases, and no-configuration-write policy.
+- Codex-only Owl, React, native, browser, window, view, CDP, and external MCP surfaces are not copied.
