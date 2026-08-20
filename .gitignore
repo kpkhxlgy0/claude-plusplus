@@ -8,6 +8,8 @@ build
 *.tsbuildinfo
 coverage
 .playwright-cli/
+.superpowers/
+.worktrees/
 .env
 .env.*
 !.env.example
