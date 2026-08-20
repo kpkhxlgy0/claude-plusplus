@@ -24,7 +24,7 @@ import { getDebugInfo } from "../src/commands/debug.ts";
 import { doctorClaudePlusPlus } from "../src/commands/doctor.ts";
 import { launchClaudePlusPlus } from "../src/commands/launch.ts";
 import { repairClaudePlusPlus } from "../src/commands/repair.ts";
-import { setSafeMode } from "../src/commands/safe-mode.ts";
+import { parseSafeModeArguments, runSafeMode } from "../src/commands/safe-mode.ts";
 import { getClaudePlusPlusStatus } from "../src/commands/status.ts";
 import { uninstallClaudePlusPlus } from "../src/commands/uninstall.ts";
 import type { ClaudeInstall } from "../src/platform.ts";
@@ -289,17 +289,79 @@ test("maintenance migrates defaults while preserving config, Tweak Junctions, da
   }
 });
 
-test("Safe Mode changes only config.json", async () => {
+test("Safe Mode arguments accept default/on/off/status and reject conflicts", () => {
+  assert.equal(parseSafeModeArguments([]), "on");
+  assert.equal(parseSafeModeArguments(["--on"]), "on");
+  assert.equal(parseSafeModeArguments(["--off"]), "off");
+  assert.equal(parseSafeModeArguments(["--status"]), "status");
+  assert.throws(() => parseSafeModeArguments(["--on", "--off"]), /only one/i);
+  assert.throws(() => parseSafeModeArguments(["--on", "--on"]), /duplicate/i);
+  assert.throws(() => parseSafeModeArguments(["--wat"]), /unknown/i);
+});
+
+test("Safe Mode status is read-only and mutations preserve config then refresh the marker", async () => {
   const fixture = await createFixture();
   try {
-    await installClaudePlusPlus(fixture.options, fixture.deps);
-    const stateBefore = readFileSync(fixture.paths.stateFile, "utf8");
+    mkdirSync(dirname(fixture.paths.configFile), { recursive: true });
+    writeFileSync(fixture.paths.configFile, JSON.stringify({
+      claudePlusPlus: { safeMode: false, privateSetting: "keep" },
+      tweaks: { "com.example.keep": { enabled: false } },
+      untouched: { value: 7 },
+    }));
+    const before = readFileSync(fixture.paths.configFile, "utf8");
 
-    setSafeMode(fixture.paths, true);
+    assert.deepEqual(runSafeMode("status", fixture.paths), {
+      safeMode: false,
+      changed: false,
+      restartRequired: false,
+    });
+    assert.equal(readFileSync(fixture.paths.configFile, "utf8"), before);
+    assert.equal(existsSync(fixture.paths.tweaks), false);
 
+    assert.deepEqual(runSafeMode("on", fixture.paths, { now: () => 100 }), {
+      safeMode: true,
+      changed: true,
+      restartRequired: true,
+    });
     const config = JSON.parse(readFileSync(fixture.paths.configFile, "utf8"));
-    assert.equal(config.claudePlusPlus.safeMode, true);
-    assert.equal(readFileSync(fixture.paths.stateFile, "utf8"), stateBefore);
+    assert.equal(config.claudePlusPlus.privateSetting, "keep");
+    assert.equal(config.tweaks["com.example.keep"].enabled, false);
+    assert.equal(config.untouched.value, 7);
+    const marker = join(fixture.paths.tweaks, ".claudepp-safe-mode-reload");
+    assert.equal(readFileSync(marker, "utf8"), "100");
+
+    assert.deepEqual(runSafeMode("on", fixture.paths, { now: () => 200 }), {
+      safeMode: true,
+      changed: false,
+      restartRequired: true,
+    });
+    assert.equal(readFileSync(marker, "utf8"), "200");
+
+    assert.deepEqual(runSafeMode("off", fixture.paths, { now: () => 300 }), {
+      safeMode: false,
+      changed: true,
+      restartRequired: true,
+    });
+    assert.equal(readFileSync(marker, "utf8"), "300");
+    assert.equal(
+      JSON.parse(readFileSync(fixture.paths.configFile, "utf8")).claudePlusPlus.safeMode,
+      false,
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("Safe Mode status on a fresh profile creates nothing", async () => {
+  const fixture = await createFixture();
+  try {
+    assert.deepEqual(runSafeMode("status", fixture.paths), {
+      safeMode: false,
+      changed: false,
+      restartRequired: false,
+    });
+    assert.equal(existsSync(fixture.paths.configFile), false);
+    assert.equal(existsSync(fixture.paths.tweaks), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

@@ -5,11 +5,10 @@ import { doctorClaudePlusPlus } from "./commands/doctor.js";
 import { installClaudePlusPlus } from "./commands/install.js";
 import { launchClaudePlusPlus } from "./commands/launch.js";
 import { repairClaudePlusPlus } from "./commands/repair.js";
-import { setSafeMode } from "./commands/safe-mode.js";
 import { getClaudePlusPlusStatus } from "./commands/status.js";
 import { parseSelfUpdateArguments, selfUpdate } from "./commands/self-update.js";
 import { runWatcherCommand } from "./commands/watcher.js";
-import { runRecoveryCli } from "./cli-recovery.js";
+import { RECOVERY_HELP_TEXT, runRecoveryCli } from "./cli-recovery.js";
 
 const version = "0.2.9";
 
@@ -48,10 +47,6 @@ async function main(argv: string[]): Promise<void> {
     case "watcher":
       print(await runWatcherCommand(argv[1]));
       return;
-    case "safe-mode":
-      setSafeMode(undefined, !argv.includes("--off"));
-      print({ safeMode: !argv.includes("--off") });
-      return;
     case "launch":
       launchClaudePlusPlus();
       print({ launched: true });
@@ -82,9 +77,8 @@ Commands:
   self-update [...]    Alias for update
   watcher enable|disable|status
                        Manage the optional logon and five-minute repair tasks
-  safe-mode [--off]    Enable or disable Safe Mode
+${RECOVERY_HELP_TEXT}
   launch               Launch the managed Claude app
-  uninstall [--purge]  Remove Claude++; preserve Tweak data unless purged
 `);
 }
 
