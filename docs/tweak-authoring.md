@@ -2,7 +2,7 @@
 
 Claude++ Tweaks are CommonJS modules with a `start(api)` lifecycle and an optional `stop()` lifecycle. Their `manifest.json` declares both the processes in which they run and the capabilities exposed by each process-specific API lease.
 
-This document describes the focused Main Tweak capabilities added in Claude++ 0.2.5 through 0.2.7.
+This document describes the focused Main Tweak capabilities added in Claude++ 0.2.5 through 0.2.9.
 
 ## Desktop runtime MCP and session titles
 
@@ -12,9 +12,10 @@ Claude++ 0.2.6 adds two Main-only permissions:
 - `claude-session-title-write` exposes `api.claude.sessionTitles.setTitle(sessionId, title)` for an explicit Claude
   Desktop manager key or the Claude Code CLI session UUID exposed inside the conversation.
 
-Claude++ 0.2.7 lets a handler pass its caller context as the optional third `setTitle` argument. Runtime then reads
-the caller's live session snapshot to bind the UUID Claude reports for its current conversation. Session-title Tweaks
-that accept that UUID must require Runtime 0.2.7.
+Claude++ 0.2.7 lets a handler pass its caller context as the optional third `setTitle` argument. Versions through
+0.2.8 attempted to read the reported Claude Code UUID from public session snapshots, but the current DDK snapshot
+omits it. Runtime 0.2.9 instead uses the raw DDK record only to correlate the UUID, then revalidates the mapped key
+through the public session lookup. Session-title Tweaks that accept that UUID must require Runtime 0.2.9.
 
 Renderer-only manifests cannot request either permission, and Renderer API leases never expose either capability. A
 Main-only manifest requesting both capabilities looks like this:
@@ -25,7 +26,7 @@ Main-only manifest requesting both capabilities looks like this:
   "name": "Example Session Title",
   "version": "0.1.1",
   "githubRepo": "example/session-title",
-  "minRuntime": "0.2.7",
+  "minRuntime": "0.2.9",
   "scope": "main",
   "main": "index.js",
   "permissions": [
@@ -43,7 +44,7 @@ let registration;
 async function start(api) {
   if (api.process !== "main") return;
   if (!api.mcp || !api.claude?.sessionTitles) {
-    throw new Error("This Tweak requires Claude++ 0.2.7 or newer.");
+    throw new Error("This Tweak requires Claude++ 0.2.9 or newer.");
   }
 
   registration = await api.mcp.registerServer({
@@ -89,9 +90,11 @@ start with `claudepp_`; every server needs at least one tool, and every tool nee
 contain MCP text content. The read-only handler context identifies the caller session for auditing; it does not select
 the title target. A title target always comes from the explicit `sessionId` argument.
 
-`context.callerSessionId` is Desktop's internal manager key. Pass the unchanged context to `setTitle`; Runtime reads
-that caller's live snapshot and compares its Claude Code CLI UUID with the explicit target. A match routes to the
-bound `local_*` key. Runtime never substitutes the current session for an unrelated or misspelled ID.
+`context.callerSessionId` is Desktop's internal manager key. Pass the unchanged context to `setTitle`; Runtime first
+reads that caller's raw DDK session record and compares its `cliSessionId` with the explicit target. A match routes to
+the bound `local_*` key only after the alias remains unique and public `getSession(...)` confirms that the mapped key
+is still live. Runtime never treats a raw record as update authority or substitutes the current session for an
+unrelated or misspelled ID.
 
 The registration is a revocable lease. Call `unregister()` during `stop()` even though Claude++ also revokes all
 registrations when the owning Main API lease is disposed. Revocation immediately makes retained handlers and API
@@ -102,19 +105,20 @@ descriptions, and input schemas cannot change after unregister, disable, or hot 
 replace handler functions only when that complete structure is identical. Existing SDK handlers dynamically resolve
 the current active handler, so do not retain or call a handler from a previous Tweak lease.
 
-`setTitle` trims both arguments and first accepts an exact Desktop manager key. If the explicit target equals the
-caller's CLI UUID, it revalidates and uses the bound caller key. Other CLI UUID targets are resolved through public
-`getSession(...)` snapshots and must match exactly one known manager key. It limits the title to 200 UTF-16 code
-units, uses Desktop's user-title update path, and verifies an exact read-back before resolving. Unknown and ambiguous
-aliases are rejected. It can update the current session or another session known to the same Desktop process. The MCP
-injection itself writes no `~/.claude.json`, project
+`setTitle` trims both arguments and first accepts an exact Desktop manager key. Otherwise it correlates a Claude Code
+CLI UUID through the DDK manager's raw `sessions` Map, checking the caller-bound record first and then requiring a
+unique process-wide match. The mapped key must still resolve through public `getSession(...)` before Runtime updates
+it. It limits the title to 200 UTF-16 code units, uses Desktop's user-title update path, and verifies an exact read-back
+before resolving. Unknown and ambiguous aliases are rejected. It can update the current session or another session
+known to the same Desktop process. The MCP injection itself writes no `~/.claude.json`, project
 `.mcp.json`, Claude `settings.json`, or managed MCP block. A successful title change does use Desktop's normal session
 persistence path so the title survives restart.
 
-These APIs support Claude Desktop only; they do not add tools to terminal-launched Claude Code. Runtime 0.2.7 is
-locked to an exact supported private Desktop build, including module hashes and runtime shapes. A version, hash, or
-shape mismatch fails closed: Claude continues to run, no server is injected, and Claude++ does not fall back to a
-configuration write or another private patch.
+These APIs support Claude Desktop only; they do not add tools to terminal-launched Claude Code. The reference Claude
+Session Title Tweak `0.1.2` requires Runtime `0.2.9` for raw-record UUID correlation. Runtime is locked to explicitly
+listed private Desktop builds, including module hashes and runtime shapes. A version, hash, or shape mismatch fails
+closed: Claude continues to run, no server is injected, and Claude++ does not fall back to a configuration write or
+another private patch.
 
 This is an approved difference from Codex++. Codex++ declares external `command`/`args`/`env` servers in
 `manifest.mcp` and synchronizes a managed block into `~/.codex/config.toml`. To meet Claude++'s no-configuration-write

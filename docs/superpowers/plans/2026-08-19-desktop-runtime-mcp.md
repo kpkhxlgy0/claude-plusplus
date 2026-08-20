@@ -864,5 +864,6 @@ Read-only inspection of Claude Desktop `1.32885.1` found that the DDK manager's 
 - Treat the raw Map only as a correlation index; after a unique match, call public `getSession(...)` to verify the
   mapped Desktop key is still live before updating and reading the title back.
 - Release the correction as Claude++ `0.2.9`.
-- Keep Claude Session Title at `0.1.1` with minimum Runtime `0.2.7`; keep its required `session_id` and `title`
-  arguments unchanged.
+- Publish Claude Session Title `0.1.2` with minimum Runtime `0.2.9`; keep its required `session_id` and `title`
+  arguments unchanged. This supersedes the interim `0.1.1` / Runtime `0.2.7` compatibility decision now that
+  raw-record UUID correlation is required on the supported current Desktop build.

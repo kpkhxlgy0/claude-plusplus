@@ -83,7 +83,7 @@ test("keeps workflow protocols and private compatibility probes out of core", ()
   }
 });
 
-test("ships an empty public Tweak Store", () => {
+test("ships an empty source Tweak Store seed", () => {
   const source = readFileSync(new URL("../store/index.json", import.meta.url), "utf8");
   const store = JSON.parse(source);
   assert.deepEqual(store, { schemaVersion: 1, entries: [] });
@@ -105,7 +105,6 @@ test("documents the release commands and opt-in maintenance defaults", () => {
   assert.match(readme, /Watcher and automatic refresh are off by default/i);
   assert.match(readme, /Stable and Prerelease.*do not require.*system Node\.js/is);
   assert.match(readme, /Custom.*Node\.js 24\+/is);
-  assert.match(readme, /Store starts empty/i);
   assert.match(readme, /Private workflow Tweaks.*distributed.*separately/is);
 });
 

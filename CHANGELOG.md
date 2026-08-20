@@ -15,7 +15,8 @@ Release notes: [docs/releases/0.2.9.md](docs/releases/0.2.9.md)
   manager's raw session record, whose public `getSession(...)` snapshot omits `cliSessionId`.
 - Kept exact Desktop keys authoritative, rejected duplicate UUID aliases, and validated a uniquely mapped target
   through `getSession(...)` before updating its title.
-- Kept Claude Session Title `0.1.1` and its Runtime `0.2.7` minimum unchanged.
+- Paired the correction with Claude Session Title `0.1.2`, which requires Runtime `0.2.9` while keeping the required
+  `session_id` and `title` tool arguments unchanged.
 
 ## 0.2.8
 

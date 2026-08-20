@@ -58,7 +58,7 @@ try {
         throw 'Portable Node archive does not contain node.exe'
     }
 
-    foreach ($directory in @('bin', 'toolchain', 'packages', 'store')) {
+    foreach ($directory in @('bin', 'docs', 'toolchain', 'packages', 'store')) {
         New-Item -ItemType Directory -Force -Path (Join-Path $payload $directory) | Out-Null
     }
     Copy-Item -LiteralPath (Join-Path $nodeRoot.FullName 'node.exe') -Destination (Join-Path $payload 'toolchain\node.exe')
@@ -66,6 +66,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $payload
     Copy-Item -LiteralPath (Join-Path $repoRoot 'THIRD_PARTY_NOTICES.md') -Destination $payload
     Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination $payload
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\tweak-authoring.md') -Destination (Join-Path $payload 'docs\tweak-authoring.md')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'install.ps1') -Destination $payload
     Copy-Item -LiteralPath (Join-Path $repoRoot 'package.json') -Destination $payload
     Copy-Item -LiteralPath (Join-Path $repoRoot 'package-lock.json') -Destination $payload

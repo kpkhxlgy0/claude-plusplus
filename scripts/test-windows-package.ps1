@@ -26,6 +26,7 @@ try {
         'packages\runtime\dist\preload\index.js',
         'packages\loader\loader.cjs',
         'packages\installer\dist\cli.js',
+        'docs\tweak-authoring.md',
         'store\index.json',
         'install.ps1',
         'LICENSE',

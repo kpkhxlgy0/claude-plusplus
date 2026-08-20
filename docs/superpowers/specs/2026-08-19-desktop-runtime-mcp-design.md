@@ -215,8 +215,10 @@ The independent project is `D:\Unity\claude-session-title` and follows the exist
 - compatibility validation script and tests
 - `LICENSE`
 
-Its manifest is Main-only, requires Claude++ `0.2.7`, and requests only `mcp` and
-`claude-session-title-write`.
+Its current published manifest is Main-only, requires Claude++ `0.2.9`, and requests only `mcp` and
+`claude-session-title-write`. Version `0.1.2` raised the Runtime floor from the interim `0.2.7` requirement because
+raw-record UUID correlation is necessary on the supported current Desktop build; the required MCP tool arguments did
+not change.
 
 ## Verification
 
