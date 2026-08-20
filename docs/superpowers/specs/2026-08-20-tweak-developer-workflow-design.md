@@ -96,7 +96,7 @@ claudeplusplus dev [target]
 
 The default target is `.`. Dev validates the source directory and entry before touching the live Tweaks directory.
 
-The default link name is `manifest.id`. An explicit `--name` must use the same character set as a manifest id: letters, numbers, dots, underscores, and dashes. It cannot be empty, `.` or `..`, contain a path separator, or resolve anywhere except an immediate child of `paths.tweaks`.
+The source directory may live anywhere the user explicitly selects, but it must resolve to an existing directory containing a valid Tweak. The default link name is `manifest.id`. An explicit `--name` must use the same character set as a manifest id: letters, numbers, dots, underscores, and dashes. It cannot be empty, `.` or `..`, contain a path separator, or resolve anywhere except an immediate child of `paths.tweaks`.
 
 On Windows, the link is a directory Junction from `<paths.tweaks>/<link-name>` to the absolute source directory.
 
@@ -106,7 +106,7 @@ Collision behavior:
 - An existing Junction to another source requires `--replace`.
 - `--replace` removes only that contained Junction and creates the new one.
 - A real file or directory is never removed or replaced.
-- A malformed, broken, or escaping reparse target is rejected rather than followed.
+- A malformed or broken existing reparse target is rejected rather than followed. A valid Junction target outside `paths.tweaks` is expected because it is the explicitly selected source project; containment applies to the live link path, not to that source.
 
 After the link is ready, write `.claudepp-dev-reload` directly under `paths.tweaks`. This root-level marker deliberately differs from Codex++'s marker-inside-link design so Windows reload signaling does not depend on Junction event propagation.
 
@@ -116,7 +116,9 @@ Without `--no-watch`, recursively watch the source directory. Ignore `node_modul
 2. On success, update the root-level reload marker and print a valid timestamp/path message.
 3. On failure, print the validation failure and do not update the root marker.
 
-SIGINT and SIGTERM cancel the pending timer, close the watcher, remove installed signal handlers, and resolve normally. The command does not delete the development Junction on exit.
+The existing Runtime watcher retains Chokidar's default `followSymlinks: true`, matching Codex++. Consequently, a source edit under a development Junction may also reach Runtime directly before or independently of this 100-millisecond validation loop. The root marker is a deterministic supplemental success signal, not a validation gate for Runtime reload. An invalid edit does not write the marker, but it may still cause Runtime to stop the old Tweak and fail to rediscover the edited Tweak. Duplicate direct/marker events normally debounce together but are not guaranteed to do so. This Codex++ parity tradeoff was explicitly approved on 2026-08-21.
+
+SIGINT and SIGTERM cancel the pending timer, close the watcher, remove installed signal handlers, and resolve normally. A source-watcher error uses the same idempotent cleanup path and then fails the command. The command does not delete the development Junction on exit.
 
 ## Generated Project
 
@@ -134,9 +136,9 @@ No template requests `network`, `claude-sessions`, startup environment, Claude C
 
 Renderer scope registers a Settings page and renders text using DOM APIs.
 
-Main scope logs startup and registers a namespaced `ping` IPC handler.
+Main scope logs startup and registers the local `ping` IPC handler; Claude++ Runtime adds the Tweak-id namespace.
 
-Both scope branches on `api.process`: Main registers the handler; Renderer registers a Settings page with a button that invokes it. Every template provides a `stop()` location and retains cleanup handles where an API requires explicit disposal.
+Both scope branches on `api.process`: Main registers local channel `ping`; Renderer registers a Settings page with a button that invokes the same local channel. Every template provides a `stop()` location and retains cleanup handles where an API requires explicit disposal.
 
 Templates use `module.exports`; they contain no raw TypeScript, ESM import/export, Codex global, Owl, React, native-host, or external MCP configuration.
 
@@ -199,7 +201,7 @@ Content requirements:
 - API reference: public SDK interfaces grouped by common, Renderer, Main, and permission-gated capability.
 - TypeScript and bundling: local SDK source installation, browser-vs-Node esbuild targets, CommonJS output, both-process constraints.
 - Distribution/debugging: release checks, reviewed Store commits, log locations, DevTools/Main logs, compatibility and cleanup rules.
-- Advanced guide: existing startup environment, Claude Code settings, in-process MCP, and session-title material remains authoritative and linked rather than duplicated inconsistently.
+- Advanced guide: retain the existing Claude Code settings, in-process MCP, and session-title material; add a startup-environment section grounded in Runtime behavior and the production GPT Context Window Tweak, then link rather than duplicate those advanced capabilities elsewhere.
 
 Packaging copies the complete `docs/tweaks` directory in addition to `docs/tweak-authoring.md`.
 
@@ -207,9 +209,10 @@ Packaging copies the complete `docs/tweaks` directory in addition to `docs/tweak
 
 - File writes occur only after manifest and target preflight succeeds.
 - Create never overwrites non-empty content.
-- Dev link targets and link destinations are resolved and containment-checked before removal or creation.
+- Dev source targets are resolved and validated as Tweak directories; live link destinations are containment-checked before removal or creation.
 - `--replace` applies only to a contained reparse point; it never removes a real directory.
 - Source validation errors never cause a live marker update.
+- Source validation is advisory rather than a Runtime reload barrier because the approved Runtime watcher continues following Junctions as Codex++ does.
 - The CLI does not execute Tweak source during create, validation, or link setup.
 - Main Tweaks remain trusted local Node.js code; manifest permissions constrain Claude++ API leases but are not an operating-system sandbox.
 - Documentation does not imply that Renderer Tweaks have Node `require`, that external MCP configuration is supported, or that private Claude internals are stable public APIs.
@@ -225,10 +228,11 @@ Tests follow red-green-refactor and cover:
 - No partial scaffold when generated manifest validation fails.
 - Validation of a generated Tweak, a direct manifest path, fallback entries, warnings, invalid JSON, SDK-invalid fields, and missing explicit/fallback entries.
 - Dev creation of a Windows Junction at the manifest id.
-- Idempotent same-source linking, wrong-source refusal, `--replace`, real-directory refusal, broken/escaping link refusal, and link-name containment.
+- Idempotent same-source linking, wrong-source refusal, `--replace`, real-directory refusal, broken-link refusal, and link-name containment.
 - `--no-watch` exits after linking and marker creation.
 - Injected watcher tests prove debounce, `node_modules` filtering, valid marker updates, invalid no-update behavior, and signal cleanup without waiting on real filesystem timing.
 - Existing Runtime tests continue to prove serialized Main/Renderer reload and lease revocation.
+- Documentation and tests do not claim that an invalid Junction-source edit leaves the currently running Tweak active.
 - Installer builds with the SDK dependency and the portable package materializes a resolvable SDK package.
 - Documentation/package tests prove every linked authoring document is included in the release payload.
 

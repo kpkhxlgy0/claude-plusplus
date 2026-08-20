@@ -41,7 +41,7 @@ Claude++ currently treats valid Loader metadata as proof that the managed ASAR i
 
 The state-independent managed mirror target is exactly `paths.storeApps`, resolved from `%LOCALAPPDATA%\claude-plusplus\store-apps`. It must never be constructed from a state field, command argument, wildcard, or unresolved environment-variable string.
 
-Add a local-root assertion parallel to `assertClaudePlusPlusRoamingPath`. It resolves the configured `localRoot` and candidate with Windows path semantics and accepts the local root itself only when the caller explicitly requests it. Uninstall validates `paths.storeApps` as the exact expected child before invoking recursive removal.
+Add a local-root assertion parallel to `assertClaudePlusPlusRoamingPath`. It resolves the configured `localRoot` and candidate with Windows path semantics and accepts the local root itself only when the caller explicitly requests it. Before invoking Watcher cleanup or any filesystem mutation, uninstall validates every fixed destructive target: `paths.runtime` must be exactly `<roamingRoot>\runtime`, `paths.stateFile` exactly `<roamingRoot>\state.json`, `paths.shortcutFile` exactly the Claude++ Start Menu shortcut derived from the same `%APPDATA%` root, and `paths.storeApps` exactly `<localRoot>\store-apps`. Containment alone is insufficient because, for example, `paths.tweaks` is inside the roaming root but must survive ordinary uninstall.
 
 ### State handling
 
@@ -53,7 +53,7 @@ Uninstall performs these operations in order:
 
 1. Resolve paths and read state.
 2. Validate any state-derived managed package path, solely to reject forged external targets.
-3. Validate the fixed roaming and local cleanup roots.
+3. Preflight every fixed Runtime, state-file, shortcut, roaming, and local cleanup target; abort before Watcher cleanup if any exact-path check fails.
 4. Remove Watcher tasks/script through the existing Watcher cleanup.
 5. Attempt fixed-root `storeApps` cleanup independently of state.
 6. Remove Runtime, state, and Start Menu shortcut.
@@ -185,6 +185,7 @@ Tests follow red-green-refactor and cover:
 
 - Uninstall removes the entire fixed `storeApps` root with missing state, malformed state, ordinary uninstall, and purge.
 - Ordinary uninstall preserves Tweaks/Tweak data; purge removes them.
+- Substituting Runtime with Tweaks, or substituting the state file, shortcut, or `storeApps` with another local/external sentinel, fails before Watcher cleanup and preserves every sentinel.
 - Forged external state still rejects before external deletion.
 - Cleanup never targets an official Claude root or a sibling of `localRoot`.
 - Safe Mode default/on/off/status, unknown/conflicting flags, no-write status, unknown-key preservation, unchanged per-Tweak flags, and reload marker creation.
