@@ -7,9 +7,9 @@ import { launchClaudePlusPlus } from "./commands/launch.js";
 import { repairClaudePlusPlus } from "./commands/repair.js";
 import { setSafeMode } from "./commands/safe-mode.js";
 import { getClaudePlusPlusStatus } from "./commands/status.js";
-import { uninstallClaudePlusPlus } from "./commands/uninstall.js";
 import { parseSelfUpdateArguments, selfUpdate } from "./commands/self-update.js";
 import { runWatcherCommand } from "./commands/watcher.js";
+import { runRecoveryCli } from "./cli-recovery.js";
 
 const version = "0.2.9";
 
@@ -23,6 +23,7 @@ async function main(argv: string[]): Promise<void> {
     console.log(version);
     return;
   }
+  if (await runRecoveryCli(command, argv.slice(1))) return;
 
   switch (command) {
     case "install":
@@ -54,10 +55,6 @@ async function main(argv: string[]): Promise<void> {
     case "launch":
       launchClaudePlusPlus();
       print({ launched: true });
-      return;
-    case "uninstall":
-      await uninstallClaudePlusPlus({ purge: argv.includes("--purge") });
-      print({ uninstalled: true, purged: argv.includes("--purge") });
       return;
     default:
       throw new Error(`Unknown Claude++ command: ${command}`);

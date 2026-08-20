@@ -396,6 +396,123 @@ test("status and doctor reject a managed app whose integrity fuse is enabled", a
   }
 });
 
+test("uninstall removes every managed mirror when state is missing", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const orphan = join(fixture.paths.storeApps, "Claude_orphan", "app");
+    mkdirSync(orphan, { recursive: true });
+    rmSync(fixture.paths.stateFile, { force: true });
+
+    const result = await uninstallClaudePlusPlus(
+      { paths: fixture.paths },
+      { uninstallWatcher: () => {} },
+    );
+
+    assert.deepEqual(result, { warnings: [] });
+    assert.equal(existsSync(fixture.paths.storeApps), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("purge removes fixed mirrors and roaming data when state JSON is malformed", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    writeFileSync(fixture.paths.stateFile, "{ malformed", "utf8");
+    const outside = join(fixture.root, "outside", "sentinel.txt");
+    mkdirSync(dirname(outside), { recursive: true });
+    writeFileSync(outside, "keep", "utf8");
+
+    const result = await uninstallClaudePlusPlus(
+      { paths: fixture.paths, purge: true },
+      { uninstallWatcher: () => {} },
+    );
+
+    assert.deepEqual(result, { warnings: [] });
+    assert.equal(existsSync(fixture.paths.storeApps), false);
+    assert.equal(existsSync(fixture.paths.roamingRoot), false);
+    assert.equal(readFileSync(outside, "utf8"), "keep");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("uninstall reports fixed-root cleanup failures and still removes runtime state", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const result = await uninstallClaudePlusPlus({ paths: fixture.paths }, {
+      uninstallWatcher: () => {},
+      cleanupWindowsManagedArtifacts: async (paths) => [
+        `Could not remove Claude++ managed Store mirrors at ${paths.storeApps}. ` +
+        "Close Claude++ and rerun uninstall. locked managed mirror",
+      ],
+    });
+    assert.deepEqual(result.warnings, [
+      `Could not remove Claude++ managed Store mirrors at ${fixture.paths.storeApps}. ` +
+      "Close Claude++ and rerun uninstall. locked managed mirror",
+    ]);
+    assert.equal(existsSync(fixture.paths.runtime), false);
+    assert.equal(existsSync(fixture.paths.stateFile), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("uninstall preflights every destructive target before Watcher cleanup", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const tweakSentinel = join(fixture.paths.tweaks, "keep.txt");
+    const stateSentinel = join(fixture.root, "outside", "state-sentinel.json");
+    const shortcutSentinel = join(fixture.root, "outside", "shortcut-sentinel.lnk");
+    const cacheSentinel = join(fixture.paths.cache, "keep.txt");
+    for (const sentinel of [tweakSentinel, stateSentinel, shortcutSentinel, cacheSentinel]) {
+      mkdirSync(dirname(sentinel), { recursive: true });
+      writeFileSync(sentinel, "keep", "utf8");
+    }
+    writeFileSync(fixture.paths.stateFile, "{ malformed", "utf8");
+
+    const substitutions = [
+      {
+        paths: { ...fixture.paths, runtime: fixture.paths.tweaks },
+        error: /exact Claude\+\+ Runtime directory/i,
+      },
+      {
+        paths: { ...fixture.paths, stateFile: stateSentinel },
+        error: /exact Claude\+\+ state file/i,
+      },
+      {
+        paths: { ...fixture.paths, shortcutFile: shortcutSentinel },
+        error: /exact Claude\+\+ Start Menu shortcut/i,
+      },
+      {
+        paths: { ...fixture.paths, storeApps: fixture.paths.cache },
+        error: /exact Claude\+\+ store-apps root/i,
+      },
+    ];
+
+    for (const substitution of substitutions) {
+      let watcherCalls = 0;
+      await assert.rejects(
+        uninstallClaudePlusPlus(
+          { paths: substitution.paths },
+          { uninstallWatcher: () => { watcherCalls += 1; } },
+        ),
+        substitution.error,
+      );
+      assert.equal(watcherCalls, 0);
+      for (const sentinel of [tweakSentinel, stateSentinel, shortcutSentinel, cacheSentinel]) {
+        assert.equal(readFileSync(sentinel, "utf8"), "keep");
+      }
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("uninstall preserves Tweak data by default and purge removes it", async () => {
   const fixture = await createFixture();
   try {
