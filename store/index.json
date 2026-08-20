@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-16T15:00:24Z",
+  "generatedAt": "2026-08-20T04:28:53Z",
   "entries": [
     {
       "id": "com.kpk.claude-api-skill-override",
@@ -37,6 +37,39 @@
       "platforms": [
         "win32"
       ]
+    },
+    {
+      "id": "com.kpk.claude-session-title",
+      "manifest": {
+        "id": "com.kpk.claude-session-title",
+        "name": "Claude Session Title",
+        "version": "0.1.2",
+        "description": "Rename Claude Desktop sessions through a permission-scoped MCP tool.",
+        "author": "KPK",
+        "iconUrl": "./icon.png",
+        "tags": [
+          "session",
+          "title",
+          "mcp"
+        ],
+        "githubRepo": "kpkhxlgy0/claude-session-title",
+        "minRuntime": "0.2.9",
+        "scope": "main",
+        "main": "index.js",
+        "permissions": [
+          "mcp",
+          "claude-session-title-write"
+        ]
+      },
+      "repo": "kpkhxlgy0/claude-session-title",
+      "approvedCommitSha": "85c8763b04334c0392ce7c5242eb029b6fed1c24",
+      "approvedAt": "2026-08-20T04:28:53Z",
+      "approvedBy": "KPK",
+      "platforms": [
+        "win32"
+      ],
+      "releaseUrl": "https://github.com/kpkhxlgy0/claude-session-title/releases/tag/v0.1.2",
+      "reviewUrl": "https://github.com/kpkhxlgy0/claude-plusplus/issues/2"
     },
     {
       "id": "com.kpk.gpt-context-window",
