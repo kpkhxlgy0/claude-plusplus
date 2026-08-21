@@ -979,6 +979,39 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 
+test("dev source watcher ignores source and timer callbacks after signal completion", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const fixture = fakeDevSourceWatcher();
+    const watching = watchTweakProject(source, paths, fixture.dependencies);
+    fixture.sourceListener?.("change", "index.js");
+    const pending = fixture.scheduled[0]!;
+    const sourceListener = fixture.sourceListener;
+    const stop = fixture.signalListeners.get("SIGINT");
+    const lateStop = fixture.signalListeners.get("SIGTERM");
+    const lateError = fixture.errorListener;
+
+    assert.ok(stop);
+    assert.ok(lateStop);
+    stop();
+    await watching;
+    rmSync(join(source, "manifest.json"));
+
+    sourceListener?.("change", "late.js");
+    for (const timer of [...fixture.scheduled]) await timer.callback();
+    lateStop();
+    lateError?.(new Error("late watcher error"));
+
+    assert.equal(pending.cancelled, true);
+    assert.equal(fixture.scheduled.length, 1);
+    assert.equal(fixture.markerWrites, 0);
+    assert.deepEqual(fixture.output.log, []);
+    assert.deepEqual(fixture.output.error, []);
+    assert.equal(fixture.watcherCloses, 1);
+    assert.deepEqual(fixture.offSignals, ["SIGINT", "SIGTERM"]);
+    assert.equal(fixture.signalListeners.size, 0);
+  });
+});
+
 test("dev source watcher errors reject after canceling and unregistering owned listeners", async () => {
   await withDevFixture(async ({ source, paths }) => {
     const fixture = fakeDevSourceWatcher();
@@ -995,6 +1028,80 @@ test("dev source watcher errors reject after canceling and unregistering owned l
     assert.deepEqual(fixture.signalListenerMatches, [true, true]);
     assert.equal(fixture.signalListeners.size, 0);
     assert.equal(fixture.markerWrites, 0);
+  });
+});
+
+test("dev source watcher ignores source and timer callbacks after error completion", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const fixture = fakeDevSourceWatcher();
+    const watching = watchTweakProject(source, paths, fixture.dependencies);
+    fixture.sourceListener?.("change", "index.js");
+    const pending = fixture.scheduled[0]!;
+    const sourceListener = fixture.sourceListener;
+    const lateStop = fixture.signalListeners.get("SIGINT");
+    const watcherError = fixture.errorListener;
+
+    assert.ok(lateStop);
+    assert.ok(watcherError);
+    watcherError(new Error("watch failed"));
+    await assert.rejects(watching, /Tweak source watcher failed: watch failed/);
+    rmSync(join(source, "manifest.json"));
+
+    sourceListener?.("rename", null);
+    for (const timer of [...fixture.scheduled]) await timer.callback();
+    lateStop();
+    watcherError(new Error("second watcher error"));
+
+    assert.equal(pending.cancelled, true);
+    assert.equal(fixture.scheduled.length, 1);
+    assert.equal(fixture.markerWrites, 0);
+    assert.deepEqual(fixture.output.log, []);
+    assert.deepEqual(fixture.output.error, []);
+    assert.equal(fixture.watcherCloses, 1);
+    assert.deepEqual(fixture.offSignals, ["SIGINT", "SIGTERM"]);
+    assert.equal(fixture.signalListeners.size, 0);
+  });
+});
+
+test("dev source watcher lets only the current timer validate and retains its ownership", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const validatesCurrent = fakeDevSourceWatcher();
+    const firstWatching = watchTweakProject(source, paths, validatesCurrent.dependencies);
+    validatesCurrent.sourceListener?.("change", "index.js");
+    validatesCurrent.sourceListener?.("change", "manifest.json");
+    const stale = validatesCurrent.scheduled[0]!;
+    const current = validatesCurrent.scheduled[1]!;
+
+    assert.equal(stale.cancelled, true);
+    assert.equal(current.cancelled, false);
+    await stale.callback();
+    assert.equal(validatesCurrent.markerWrites, 0);
+    assert.deepEqual(validatesCurrent.output.log, []);
+    assert.deepEqual(validatesCurrent.output.error, []);
+
+    await current.callback();
+    assert.equal(validatesCurrent.markerWrites, 1);
+    assert.deepEqual(validatesCurrent.output.log, ["valid 03:04:05 (manifest.json)"]);
+    validatesCurrent.signalListeners.get("SIGINT")?.();
+    await firstWatching;
+
+    const retainsOwnership = fakeDevSourceWatcher();
+    const secondWatching = watchTweakProject(source, paths, retainsOwnership.dependencies);
+    retainsOwnership.sourceListener?.("change", "index.js");
+    retainsOwnership.sourceListener?.("change", "manifest.json");
+    const previous = retainsOwnership.scheduled[0]!;
+    const owned = retainsOwnership.scheduled[1]!;
+
+    await previous.callback();
+    retainsOwnership.signalListeners.get("SIGTERM")?.();
+    await secondWatching;
+    await owned.callback();
+
+    assert.equal(owned.cancelled, true);
+    assert.equal(retainsOwnership.markerWrites, 0);
+    assert.deepEqual(retainsOwnership.output.log, []);
+    assert.deepEqual(retainsOwnership.output.error, []);
+    assert.equal(retainsOwnership.watcherCloses, 1);
   });
 });
 

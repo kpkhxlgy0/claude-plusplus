@@ -84,11 +84,16 @@ export async function watchTweakProject(
   assertWindowsTweakDevelopment(platform());
 
   let pendingTimer: unknown;
+  let finished = false;
+  let generation = 0;
   const sourceListener = (_event: string, filename: string | Buffer | null): void => {
+    if (finished) return;
     const normalizedFilename = filename === null ? null : String(filename);
     if (normalizedFilename !== null && isIgnoredSourcePath(normalizedFilename)) return;
     if (pendingTimer !== undefined) clearTimer(pendingTimer);
+    const scheduledGeneration = ++generation;
     pendingTimer = setTimer(() => {
+      if (finished || scheduledGeneration !== generation) return;
       pendingTimer = undefined;
       try {
         requireValidTweakProject(sourceDir);
@@ -105,11 +110,11 @@ export async function watchTweakProject(
   const watcher = watchFactory(sourceDir, { recursive: true }, sourceListener);
 
   return new Promise<void>((resolvePromise, rejectPromise) => {
-    let finished = false;
     const stop = (): void => finish();
     const finish = (error?: unknown): void => {
       if (finished) return;
       finished = true;
+      generation += 1;
       if (pendingTimer !== undefined) {
         clearTimer(pendingTimer);
         pendingTimer = undefined;
