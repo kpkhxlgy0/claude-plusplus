@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 import type { SettingsPage } from "@claude-plusplus/sdk";
 import {
@@ -18,6 +21,11 @@ import {
   type CreatedTweakProject,
   type CreateTweakOptions,
 } from "../src/commands/create-tweak.ts";
+import { resolveClaudePlusPlusPaths, type ClaudePlusPlusPaths } from "../src/paths.ts";
+import {
+  ensureDevTweakLink,
+  prepareDevTweak,
+} from "../src/tweak-dev-link.ts";
 import { requireValidTweakProject } from "../src/tweak-project.ts";
 import type { TweakCommandOutput } from "../src/tweak-output.ts";
 import { tweakChannel } from "../../runtime/src/tweak-ipc.ts";
@@ -422,6 +430,246 @@ test("create requires a target directory argument", () => {
   );
 });
 
+test("dev preparation creates an immediate-child Junction and root marker", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    assert.equal(existsSync(paths.tweaks), false);
+
+    const result = prepareDevTweak(source, {}, {
+      paths,
+      now: () => 123,
+      output: silentOutput,
+    });
+
+    const link = join(paths.tweaks, "com.example.dev");
+    assert.equal(lstatSync(link).isSymbolicLink(), true);
+    assert.equal(realpathSync(link).toLowerCase(), realpathSync(source).toLowerCase());
+    assert.equal(result.sourceDir, resolve(source));
+    assert.equal(result.linkPath, link);
+    assert.equal(result.markerPath, join(paths.tweaks, ".claudepp-dev-reload"));
+    assert.equal(result.manifest.id, "com.example.dev");
+    assert.equal(result.linkStatus, "created");
+    assert.equal(readFileSync(result.markerPath, "utf8"), "123");
+    assert.equal(existsSync(join(source, ".claudepp-dev-reload")), false);
+  });
+});
+
+test("dev preparation keeps a current Junction and refreshes the root marker", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const created = prepareDevTweak(source, {}, {
+      paths,
+      now: () => 100,
+      output: silentOutput,
+    });
+    const current = prepareDevTweak(source, {}, {
+      paths,
+      now: () => 200,
+      output: silentOutput,
+    });
+
+    assert.equal(created.linkStatus, "created");
+    assert.equal(current.linkStatus, "current");
+    assert.equal(lstatSync(current.linkPath).isSymbolicLink(), true);
+    assert.equal(realpathSync(current.linkPath).toLowerCase(), realpathSync(source).toLowerCase());
+    assert.equal(readFileSync(current.markerPath, "utf8"), "200");
+  });
+});
+
+test("dev preparation refuses a wrong-source Junction unless replacement is requested", async () => {
+  await withDevFixture(async ({ root, source, paths }) => {
+    const other = join(root, "other-source-project");
+    createTweak(other, {
+      id: "com.example.dev",
+      name: "Other Dev",
+      repo: "example/other-dev",
+      scope: "both",
+    }, silentOutput);
+    const first = prepareDevTweak(source, {}, {
+      paths,
+      now: () => 100,
+      output: silentOutput,
+    });
+
+    assert.throws(
+      () => prepareDevTweak(other, {}, {
+        paths,
+        now: () => 200,
+        output: silentOutput,
+      }),
+      /already exists/,
+    );
+    assert.equal(realpathSync(first.linkPath).toLowerCase(), realpathSync(source).toLowerCase());
+    assert.equal(readFileSync(first.markerPath, "utf8"), "100");
+
+    const replaced = prepareDevTweak(other, { replace: true }, {
+      paths,
+      now: () => 300,
+      output: silentOutput,
+    });
+    assert.equal(replaced.linkStatus, "replaced");
+    assert.equal(realpathSync(replaced.linkPath).toLowerCase(), realpathSync(other).toLowerCase());
+    assert.equal(readFileSync(replaced.markerPath, "utf8"), "300");
+    assert.equal(existsSync(join(source, "index.js")), true);
+    assert.equal(existsSync(join(other, "index.js")), true);
+  });
+});
+
+test("dev preparation never replaces a real file", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    mkdirSync(paths.tweaks, { recursive: true });
+    const link = join(paths.tweaks, "com.example.dev");
+    writeFileSync(link, "keep", "utf8");
+
+    assert.throws(
+      () => prepareDevTweak(source, { replace: true }, { paths, output: silentOutput }),
+      /not a symbolic link/,
+    );
+    assert.equal(readFileSync(link, "utf8"), "keep");
+    assert.equal(existsSync(join(paths.tweaks, ".claudepp-dev-reload")), false);
+  });
+});
+
+test("dev preparation never replaces a real directory", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const link = join(paths.tweaks, "com.example.dev");
+    mkdirSync(link, { recursive: true });
+    writeFileSync(join(link, "keep.txt"), "keep", "utf8");
+
+    assert.throws(
+      () => prepareDevTweak(source, { replace: true }, { paths, output: silentOutput }),
+      /not a symbolic link/,
+    );
+    assert.equal(readFileSync(join(link, "keep.txt"), "utf8"), "keep");
+    assert.equal(existsSync(join(paths.tweaks, ".claudepp-dev-reload")), false);
+  });
+});
+
+test("dev preparation rejects and retains a dangling Junction", async (context) => {
+  await withDevFixture(async ({ root, source, paths }) => {
+    mkdirSync(paths.tweaks, { recursive: true });
+    const link = join(paths.tweaks, "com.example.dev");
+    try {
+      symlinkSync(join(root, "missing-junction-target"), link, "junction");
+    } catch (error) {
+      context.skip(`Windows could not create a dangling Junction: ${String(error)}`);
+      return;
+    }
+    assert.equal(lstatSync(link).isSymbolicLink(), true);
+    assert.equal(existsSync(link), false);
+
+    assert.throws(
+      () => prepareDevTweak(source, { replace: true }, { paths, output: silentOutput }),
+      /broken/,
+    );
+    assert.equal(lstatSync(link).isSymbolicLink(), true);
+    assert.equal(existsSync(link), false);
+    assert.equal(existsSync(join(paths.tweaks, ".claudepp-dev-reload")), false);
+  });
+});
+
+test("dev preparation rejects an invalid source before creating the Tweaks root", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    rmSync(join(source, "index.js"));
+
+    assert.throws(
+      () => prepareDevTweak(source, {}, { paths, output: silentOutput }),
+      /entry file does not exist/,
+    );
+    assert.equal(existsSync(paths.tweaks), false);
+  });
+});
+
+test("dev preparation requires a source directory before creating the Tweaks root", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    assert.throws(
+      () => prepareDevTweak(join(source, "manifest.json"), {}, {
+        paths,
+        output: silentOutput,
+      }),
+      /source must be a directory/,
+    );
+    assert.equal(existsSync(paths.tweaks), false);
+  });
+});
+
+test("dev preparation rejects unsupported platforms before source validation or root creation", async () => {
+  await withDevFixture(async ({ root, paths }) => {
+    assert.throws(
+      () => prepareDevTweak(join(root, "missing-source"), {}, {
+        paths,
+        output: silentOutput,
+        platform: () => "linux",
+      }),
+      /Tweak development links require Windows/,
+    );
+    assert.equal(existsSync(paths.tweaks), false);
+  });
+});
+
+for (const name of ["", ".", "..", "a/b", "a\\b", "C:escape", "bad name"]) {
+  test(`dev preparation rejects the unsafe link name ${JSON.stringify(name)} without mutation`, async () => {
+    await withDevFixture(async ({ root, source, paths }) => {
+      const before = snapshotTree(root);
+
+      assert.throws(
+        () => prepareDevTweak(source, { name }, { paths, output: silentOutput }),
+        /Tweak link name may contain only/,
+      );
+      assert.equal(existsSync(paths.tweaks), false);
+      assert.deepEqual(snapshotTree(root), before);
+    });
+  });
+}
+
+test("dev link containment refuses the Tweaks root and preserves a sibling Junction", async () => {
+  await withDevFixture(async ({ root, source, paths }) => {
+    const other = join(root, "other-contained-source");
+    createTweak(other, {
+      id: "com.example.other",
+      name: "Other",
+      repo: "example/other",
+      scope: "both",
+    }, silentOutput);
+    const sibling = join(dirname(paths.tweaks), "outside-tweaks");
+    mkdirSync(dirname(sibling), { recursive: true });
+    symlinkSync(realpathSync(other), sibling, "junction");
+
+    assert.throws(
+      () => ensureDevTweakLink(source, sibling, paths, true),
+      /immediate child/,
+    );
+    assert.equal(lstatSync(sibling).isSymbolicLink(), true);
+    assert.equal(realpathSync(sibling).toLowerCase(), realpathSync(other).toLowerCase());
+    assert.throws(
+      () => ensureDevTweakLink(source, paths.tweaks, paths, true),
+      /immediate child/,
+    );
+    assert.equal(existsSync(paths.tweaks), false);
+  });
+});
+
+test("dev preparation reports every project warning and familiar link details", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const manifestPath = join(source, "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+    delete manifest.scope;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const messages = captureTweakOutput();
+
+    const result = prepareDevTweak(source, {}, {
+      paths,
+      output: messages.output,
+    });
+
+    assert.ok(messages.warn.some((message) => message.includes("scope")));
+    assert.deepEqual(messages.log, [
+      "✓ Claude++ dev link ready",
+      `  Source: ${result.sourceDir}`,
+      `  Linked: ${result.linkPath}`,
+      `  Tweak:  ${result.manifest.id} (both)`,
+    ]);
+  });
+});
+
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
 }
@@ -502,6 +750,67 @@ function outputInto(messages: string[]): TweakCommandOutput {
     warn() {},
     error() {},
   };
+}
+
+function captureTweakOutput(): {
+  output: TweakCommandOutput;
+  log: string[];
+  warn: string[];
+  error: string[];
+} {
+  const log: string[] = [];
+  const warn: string[] = [];
+  const error: string[] = [];
+  return {
+    output: {
+      log: (message) => log.push(message),
+      warn: (message) => warn.push(message),
+      error: (message) => error.push(message),
+    },
+    log,
+    warn,
+    error,
+  };
+}
+
+async function withDevFixture(
+  run: (fixture: {
+    root: string;
+    source: string;
+    paths: ClaudePlusPlusPaths;
+  }) => Promise<void>,
+): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-dev-"));
+  try {
+    const source = join(root, "source-project");
+    createTweak(source, {
+      id: "com.example.dev",
+      name: "Dev",
+      repo: "example/dev",
+      scope: "both",
+    }, silentOutput);
+    const paths = resolveClaudePlusPlusPaths({
+      APPDATA: join(root, "profile", "appdata"),
+      LOCALAPPDATA: join(root, "profile", "localappdata"),
+      USERPROFILE: join(root, "profile"),
+    });
+    await run({ root, source, paths });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function snapshotTree(root: string): string[] {
+  const paths: string[] = [];
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      paths.push(`${relative(root, path)}:${entry.isDirectory() ? "directory" : "file"}`);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) visit(path);
+    }
+  };
+  visit(root);
+  return paths.sort();
 }
 
 function withTempDir(fn: (root: string) => void): void {
