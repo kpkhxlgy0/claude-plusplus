@@ -60,8 +60,9 @@ automatic refresh cannot be enabled until the Watcher is present.
 Claude++ adds Config, Tweaks, and Tweak Store pages to Claude Desktop Settings. The source checkout intentionally keeps
 `store/index.json` as an empty schema-valid seed. The reviewed production registry is published separately from the
 `gh-pages` branch and accepts only Tweaks pinned to an approved full Git commit. Private workflow Tweaks must be
-distributed and installed separately. See [Tweak authoring](docs/tweak-authoring.md) for manifest and API guidance,
-including the Main-only, exact-path Claude Code settings capability.
+distributed and installed separately. Start with the [Tweak author workflow](docs/tweaks/README.md). The
+[advanced Claude capability guide](docs/tweak-authoring.md) covers startup environment, exact-path Claude Code
+settings, in-process MCP, and session titles.
 
 ## Installation boundary
 

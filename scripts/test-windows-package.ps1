@@ -95,13 +95,34 @@ try {
         'packages\loader\loader.cjs',
         'packages\installer\dist\cli.js',
         'docs\tweak-authoring.md',
+        'docs\tweaks\README.md',
+        'docs\tweaks\getting-started.md',
+        'docs\tweaks\manifest.md',
+        'docs\tweaks\runtime-lifecycle.md',
+        'docs\tweaks\api-reference.md',
+        'docs\tweaks\typescript-and-bundling.md',
+        'docs\tweaks\distribution-debugging.md',
         'store\index.json',
         'install.ps1',
         'LICENSE',
         'THIRD_PARTY_NOTICES.md'
     )) {
-        if (!(Test-Path -LiteralPath (Join-Path $extract $required))) {
+        if (!(Test-Path -LiteralPath (Join-Path $extract $required) -PathType Leaf)) {
             throw "Required release content is missing: $required"
+        }
+    }
+    $tweakDocsIndex = Get-Content -LiteralPath (Join-Path $extract 'docs\tweaks\README.md') -Raw
+    foreach ($relativeLink in @(
+        './getting-started.md',
+        './manifest.md',
+        './runtime-lifecycle.md',
+        './api-reference.md',
+        './typescript-and-bundling.md',
+        './distribution-debugging.md',
+        '../tweak-authoring.md'
+    )) {
+        if (!$tweakDocsIndex.Contains("]($relativeLink)")) {
+            throw "Packaged Tweak authoring index is missing relative link: $relativeLink"
         }
     }
     $packageNames = @(Get-ChildItem -LiteralPath (Join-Path $extract 'packages') -Directory |
@@ -144,7 +165,7 @@ try {
         throw 'Packaged SDK dependency is a reparse point'
     }
     foreach ($requiredSdkPath in @('package.json', 'dist\index.js', 'dist\index.d.ts')) {
-        if (!(Test-Path -LiteralPath (Join-Path $packagedSdk $requiredSdkPath))) {
+        if (!(Test-Path -LiteralPath (Join-Path $packagedSdk $requiredSdkPath) -PathType Leaf)) {
             throw "Packaged SDK dependency is missing: $requiredSdkPath"
         }
     }

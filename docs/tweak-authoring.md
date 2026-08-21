@@ -1,8 +1,84 @@
-# Tweak authoring
+# Advanced Claude-specific Tweak capabilities
+
+Return to the [complete Tweak author workflow](./tweaks/README.md) for scaffolding, manifests, lifecycle, the public API,
+bundling, and distribution.
 
 Claude++ Tweaks are CommonJS modules with a `start(api)` lifecycle and an optional `stop()` lifecycle. Their `manifest.json` declares both the processes in which they run and the capabilities exposed by each process-specific API lease.
 
-This document describes the focused Main Tweak capabilities added in Claude++ 0.2.5 through 0.2.9.
+This advanced guide covers Claude-specific Main capabilities: startup environment, exact-path Claude Code settings,
+handler-backed in-process MCP, and session-title writes. Main Tweaks are trusted local Node.js code. Permissions control
+Claude++ API leases; they are not an operating-system sandbox.
+
+## Startup environment capability
+
+Use startup environment only when a Tweak must own a fixed set of environment keys for the next managed Claude
+launch. The permission and declaration are inseparable, and the manifest must be Main-capable:
+
+```json
+{
+  "scope": "both",
+  "permissions": [
+    "ipc",
+    "settings",
+    "startup-environment"
+  ],
+  "startupEnvironment": {
+    "keys": [
+      "EXAMPLE_MAX_TOKENS",
+      "EXAMPLE_COMPACT_THRESHOLD"
+    ]
+  }
+}
+```
+
+`startupEnvironment.keys` must be a non-empty list of unique environment-variable names. A Renderer-only Tweak, a
+permission without its declaration, or a declaration without its permission is invalid. Only the Main API lease
+exposes `api.startupEnvironment`:
+
+```ts
+interface StartupEnvironmentApi {
+  getStatus(): StartupEnvironmentStatus;
+  save(config: StartupEnvironmentConfig): StartupEnvironmentStatus;
+  relaunch(): void;
+}
+
+interface StartupEnvironmentConfig {
+  enabled: boolean;
+  variables: Record<string, string>;
+}
+
+interface StartupEnvironmentStatus {
+  saved: StartupEnvironmentConfig | null;
+  applied: StartupEnvironmentConfig | null;
+  restartRequired: boolean;
+  error?: string;
+}
+```
+
+`save()` requires exactly the declared keys with string values. It validates the complete group, writes a unique
+sibling staging file, and atomically renames it to
+`%APPDATA%\claude-plusplus\startup-environment\<tweak-id>.json`. Saving changes the next-launch snapshot; it does not
+mutate the environment already applied to the running Claude process. `saved` is the persisted snapshot, `applied` is
+the snapshot used for this launch, and `restartRequired` is their comparison. Do not assume every save requires a
+restart: a disabled snapshot can already match the applied state.
+
+At process startup, Claude++ considers only valid, enabled, Main-capable Tweaks that have this permission and
+declaration. Safe Mode, a globally disabled Tweak, a disabled snapshot, malformed data, missing source, and conflicting
+key ownership fail closed. Enabled snapshots are applied as whole groups before Claude's original main entry. Claude++
+records each incoming value so it can restore the exact baseline; a partial assignment failure rolls back that group.
+
+`relaunch()` restores the incoming baseline before asking the attached Claude app to relaunch and quit. If scheduling
+the relaunch throws, Runtime attempts to reapply the current overlay and reports the error. This is a recovery path,
+not a crash-proof or durable transaction guarantee; UI should also tell users how to quit and reopen Claude manually.
+Malformed snapshots are retained as evidence and surfaced through `status.error` rather than silently rewritten.
+
+The API is a revocable Main lease. Retained references reject after Tweak stop/reload disposes that lease. A reversible
+Tweak should expose an explicit disable-and-save action, document that the new state applies after a full restart, and
+tell users to disable the Tweak globally or remove it only after saving a disabled snapshot when recovery matters.
+
+The production [GPT Context Window Tweak](https://github.com/kpkhxlgy0/gpt-context-window) demonstrates the complete
+pattern: it declares exactly three owned keys, validates them as one group, shows saved/applied/restart-required status,
+offers relaunch plus manual-restart recovery, and releases Main and Renderer state from `stop()`.
 
 ## Desktop runtime MCP and session titles
 
