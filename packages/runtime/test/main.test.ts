@@ -312,6 +312,52 @@ test("registers the default Session from the ready event before the official win
   }
 });
 
+test("retries normal-mode default Session registration after an early Electron failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-registration-retry-"));
+  try {
+    let readyListener: (() => void) | undefined;
+    let registrationAttempts = 0;
+    let earlyFailure: unknown;
+    const successfulRegistrations: unknown[] = [];
+    const defaultSession = fakeSession((options) => {
+      registrationAttempts += 1;
+      if (registrationAttempts === 1) throw new Error("transient preload registration failure");
+      successfulRegistrations.push(options);
+      return "claude-plusplus";
+    });
+    const electron = fakeElectron(defaultSession);
+    electron.app.on = ((event: string, listener: () => void) => {
+      if (event === "ready") readyListener = listener;
+    }) as typeof electron.app.on;
+    electron.app.whenReady = async () => {
+      try {
+        readyListener?.();
+      } catch (error) {
+        earlyFailure = error;
+      }
+    };
+
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService: new FakeDesktopMcpService(),
+    });
+
+    assert.match(String(earlyFailure), /transient preload registration failure/);
+    assert.equal(registrationAttempts, 2);
+    assert.deepEqual(successfulRegistrations, [{
+      type: "frame",
+      id: "claude-plusplus",
+      filePath: "C:\\runtime\\preload.js",
+    }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("records Renderer sandbox settings and preload failures from created web contents", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-preload-diagnostics-"));
   try {

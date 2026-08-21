@@ -148,10 +148,13 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
   const registeredSessions = new WeakSet<Electron.Session>();
   const register = (session: Electron.Session) => {
     if (registeredSessions.has(session)) return;
-    registeredSessions.add(session);
-    if (safeMode) return;
+    if (safeMode) {
+      registeredSessions.add(session);
+      return;
+    }
     installRendererTweakCspCompatibility(session, log);
     registerPreload(session, deps.preloadPath, log);
+    registeredSessions.add(session);
   };
   deps.electron.app.on("session-created", (session) => register(session));
   deps.electron.app.on("ready", () => register(deps.electron.session.defaultSession));
