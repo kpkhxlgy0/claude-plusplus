@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   validateTweakManifest,
   type TweakManifest,
@@ -60,12 +60,15 @@ export function inspectTweakProject(target = "."): TweakProjectInspection {
   }
 
   const manifest = rawManifest as TweakManifest;
-  const entryPath = resolveTweakEntry(sourceDir, manifest);
-  if (entryPath === null) {
+  const entry = resolveTweakEntry(sourceDir, manifest);
+  const entryPath = entry.status === "valid" ? entry.path : null;
+  if (entry.status !== "valid") {
     errors.push({
       path: "main",
-      message: manifest.main
-        ? `entry file does not exist: ${manifest.main}`
+      message: manifest.main && entry.status === "invalid"
+        ? `entry file must resolve to a regular file inside the Tweak source project: ${manifest.main}`
+        : manifest.main
+          ? `entry file does not exist: ${manifest.main}`
         : `no entry file found; expected one of ${TWEAK_ENTRY_CANDIDATES.join(", ")}`,
     });
   }
@@ -88,22 +91,68 @@ export function requireValidInspection(
       inspection.errors.map((issue) => `${issue.path}: ${issue.message}`).join("\n"),
     );
   }
-  return inspection as ValidTweakProject;
+  if (inspection.manifest === null || inspection.entryPath === null) {
+    throw new Error("invalid Tweak project inspection: manifest and entryPath are required");
+  }
+  return {
+    ...inspection,
+    manifest: inspection.manifest,
+    entryPath: inspection.entryPath,
+    errors: [],
+  };
 }
 
 export function requireValidTweakProject(target = "."): ValidTweakProject {
   return requireValidInspection(inspectTweakProject(target));
 }
 
-function resolveTweakEntry(sourceDir: string, manifest: TweakManifest): string | null {
+type TweakEntryResolution =
+  | { status: "valid"; path: string }
+  | { status: "missing" | "invalid" };
+
+function resolveTweakEntry(
+  sourceDir: string,
+  manifest: TweakManifest,
+): TweakEntryResolution {
+  const canonicalSourceDir = realpathSync(sourceDir);
   if (manifest.main) {
+    if (isAbsolute(manifest.main) || manifest.main.split(/[\\/]+/).includes("..")) {
+      return { status: "invalid" };
+    }
     const explicit = resolve(sourceDir, manifest.main);
-    return existsSync(explicit) ? explicit : null;
+    return resolveEntryCandidate(canonicalSourceDir, explicit);
   }
 
   for (const candidate of TWEAK_ENTRY_CANDIDATES) {
     const entry = join(sourceDir, candidate);
-    if (existsSync(entry)) return entry;
+    const resolved = resolveEntryCandidate(canonicalSourceDir, entry);
+    if (resolved.status === "valid") return resolved;
   }
-  return null;
+  return { status: "missing" };
+}
+
+function resolveEntryCandidate(
+  canonicalSourceDir: string,
+  candidate: string,
+): TweakEntryResolution {
+  try {
+    const canonicalEntry = realpathSync(candidate);
+    if (!isPathInside(canonicalSourceDir, canonicalEntry) || !statSync(canonicalEntry).isFile()) {
+      return { status: "invalid" };
+    }
+    return { status: "valid", path: candidate };
+  } catch (error) {
+    return isMissingPathError(error) ? { status: "missing" } : { status: "invalid" };
+  }
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const child = relative(root, candidate);
+  return child === "" ||
+    (!child.startsWith(`..${sep}`) && child !== ".." && !isAbsolute(child));
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return error instanceof Error && "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR");
 }

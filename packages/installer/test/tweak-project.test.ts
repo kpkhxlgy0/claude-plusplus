@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -147,6 +148,167 @@ test("project inspection reports exact explicit and fallback missing-entry issue
     ]);
     assert.equal(fallback.entryPath, null);
   });
+});
+
+test("project inspection rejects an explicit entry that traverses outside the project", () => {
+  withTempDir((root) => {
+    const project = join(root, "project");
+    mkdirSync(project);
+    writeFileSync(join(root, "outside.js"), "module.exports = {};\n");
+    writeManifest(project, { ...validManifest, main: "../outside.js" });
+
+    const inspection = inspectTweakProject(project);
+
+    assert.equal(inspection.entryPath, null);
+    assert.deepEqual(inspection.errors, [
+      {
+        path: "main",
+        message:
+          "entry file must resolve to a regular file inside the Tweak source project: ../outside.js",
+      },
+    ]);
+  });
+});
+
+test("project inspection rejects an absolute entry outside the project", () => {
+  withTempDir((root) => {
+    const project = join(root, "project");
+    const outside = join(root, "outside.js");
+    mkdirSync(project);
+    writeFileSync(outside, "module.exports = {};\n");
+    writeManifest(project, { ...validManifest, main: outside });
+
+    const inspection = inspectTweakProject(project);
+
+    assert.equal(inspection.entryPath, null);
+    assert.deepEqual(inspection.errors, [
+      {
+        path: "main",
+        message:
+          `entry file must resolve to a regular file inside the Tweak source project: ${outside}`,
+      },
+    ]);
+  });
+});
+
+test("project inspection rejects an absolute entry even when its file is inside the project", () => {
+  withTempDir((root) => {
+    const entry = join(root, "index.js");
+    writeFileSync(entry, "module.exports = {};\n");
+    writeManifest(root, { ...validManifest, main: entry });
+
+    const inspection = inspectTweakProject(root);
+
+    assert.equal(inspection.entryPath, null);
+    assert.deepEqual(inspection.errors, [
+      {
+        path: "main",
+        message:
+          `entry file must resolve to a regular file inside the Tweak source project: ${entry}`,
+      },
+    ]);
+  });
+});
+
+test("project inspection rejects a dot-dot entry even when it resolves inside the project", () => {
+  withTempDir((root) => {
+    mkdirSync(join(root, "nested"));
+    writeFileSync(join(root, "index.js"), "module.exports = {};\n");
+    writeManifest(root, { ...validManifest, main: "nested/../index.js" });
+
+    const inspection = inspectTweakProject(root);
+
+    assert.equal(inspection.entryPath, null);
+    assert.deepEqual(inspection.errors, [
+      {
+        path: "main",
+        message:
+          "entry file must resolve to a regular file inside the Tweak source project: nested/../index.js",
+      },
+    ]);
+  });
+});
+
+test("project inspection rejects a project-local link whose canonical target escapes", () => {
+  withTempDir((root) => {
+    const project = join(root, "project");
+    const outside = join(root, "outside");
+    mkdirSync(project);
+    mkdirSync(outside);
+    writeFileSync(join(outside, "index.js"), "module.exports = {};\n");
+    symlinkSync(outside, join(project, "linked"), process.platform === "win32" ? "junction" : "dir");
+    writeManifest(project, { ...validManifest, main: "linked/index.js" });
+
+    const inspection = inspectTweakProject(project);
+
+    assert.equal(inspection.entryPath, null);
+    assert.deepEqual(inspection.errors, [
+      {
+        path: "main",
+        message:
+          "entry file must resolve to a regular file inside the Tweak source project: linked/index.js",
+      },
+    ]);
+  });
+});
+
+test("project inspection rejects an explicit directory entry", () => {
+  withTempDir((root) => {
+    mkdirSync(join(root, "index.js"));
+    writeManifest(root, validManifest);
+
+    const inspection = inspectTweakProject(root);
+
+    assert.equal(inspection.entryPath, null);
+    assert.deepEqual(inspection.errors, [
+      {
+        path: "main",
+        message:
+          "entry file must resolve to a regular file inside the Tweak source project: index.js",
+      },
+    ]);
+  });
+});
+
+test("project inspection skips fallback directories and keeps regular-file precedence", () => {
+  withTempDir((root) => {
+    const fallbackManifest = { ...validManifest };
+    delete (fallbackManifest as Partial<typeof validManifest>).main;
+    writeManifest(root, fallbackManifest);
+    mkdirSync(join(root, "index.js"));
+
+    const directoryOnly = inspectTweakProject(root);
+    assert.equal(directoryOnly.entryPath, null);
+    assert.deepEqual(directoryOnly.errors, [
+      {
+        path: "main",
+        message: "no entry file found; expected one of index.js, index.cjs, index.mjs",
+      },
+    ]);
+
+    writeFileSync(join(root, "index.cjs"), "module.exports = {};\n");
+    const withRegularFallback = inspectTweakProject(root);
+    assert.equal(withRegularFallback.entryPath, join(root, "index.cjs"));
+    assert.deepEqual(withRegularFallback.errors, []);
+  });
+});
+
+test("valid-project narrowing rejects an inconsistent empty-error inspection", () => {
+  for (const inconsistent of [
+    { manifest: null, entryPath: "C:\\tweak\\index.js" },
+    { manifest: validManifest, entryPath: null },
+  ]) {
+    assert.throws(
+      () => requireValidInspection({
+        sourceDir: "C:\\tweak",
+        manifestPath: "C:\\tweak\\manifest.json",
+        ...inconsistent,
+        errors: [],
+        warnings: [],
+      }),
+      new Error("invalid Tweak project inspection: manifest and entryPath are required"),
+    );
+  }
 });
 
 test("the valid-project helpers preserve warnings and aggregate every error", () => {
