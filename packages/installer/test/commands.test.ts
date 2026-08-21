@@ -125,7 +125,7 @@ test("trusted schema 2 non-current maintenance preserves its mirror and original
     assert.ok(maintained?.schemaVersion === 2);
     assert.equal(maintained.originalAsarHash, originalAsarHash);
     assert.equal(readAsarHeaderHash(maintained.asarPath), maintained.patchedAsarHash);
-    assert.equal(inspectClaudePlusPlusLoader(maintained.asarPath)?.metadata.loaderVersion, "0.2.9");
+    assert.equal(inspectClaudePlusPlusLoader(maintained.asarPath)?.metadata.loaderVersion, "0.3.0");
     assert.equal(
       readFileSync(join(fixture.paths.runtime, "main.js"), "utf8"),
       "module.exports = { maintained: true };\n",
@@ -512,7 +512,7 @@ test("repair restores a missing Runtime and a missing Loader", async () => {
     await repairClaudePlusPlus(fixture.options, fixture.deps);
 
     assert.equal(existsSync(join(fixture.paths.runtime, "main.js")), true);
-    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.2.9");
+    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.3.0");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -1176,7 +1176,7 @@ function stateFixture(
 ): ClaudePlusPlusState {
   return {
     ...state,
-    claudePlusPlusVersion: "0.2.9",
+    claudePlusPlusVersion: "0.3.0",
     packageFullName: "Claude_fixture_x64__test",
     packageVersion: "1.0.0.0",
     officialAppRoot: "C:\\official\\app",

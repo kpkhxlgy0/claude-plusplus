@@ -85,7 +85,7 @@ function Get-DisposableTreeSnapshot([string]$Root) {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$archive = Join-Path $repoRoot 'dist\claude-plusplus-0.2.9-win-x64.zip'
+$archive = Join-Path $repoRoot 'dist\claude-plusplus-0.3.0-win-x64.zip'
 $archiveHash = "$archive.sha256"
 if (!(Test-Path -LiteralPath $archive)) {
     throw "Windows release archive does not exist: $archive"
@@ -354,8 +354,8 @@ try {
         $env:LOCALAPPDATA = $previousLocalAppData
         $env:USERPROFILE = $previousUserProfile
     }
-    if ($output -ne '0.2.9') {
-        throw "Expected packaged CLI version 0.2.9, received: $output"
+    if ($output -ne '0.3.0') {
+        throw "Expected packaged CLI version 0.3.0, received: $output"
     }
 } finally {
     $safeToRemoveDisposableRoots = $false
