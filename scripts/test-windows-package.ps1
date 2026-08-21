@@ -1,4 +1,67 @@
 $ErrorActionPreference = 'Stop'
+
+function Get-NormalizedAbsolutePath([string]$Path, [string]$BasePath = '') {
+    $candidate = $Path
+    if ($candidate.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $candidate.StartsWith('\??\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $candidate = '\\' + $candidate.Substring(8)
+    } elseif ($candidate.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $candidate.StartsWith('\??\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $candidate = $candidate.Substring(4)
+    }
+    if ([System.IO.Path]::IsPathFullyQualified($candidate)) {
+        $absolute = [System.IO.Path]::GetFullPath($candidate)
+    } elseif (![string]::IsNullOrEmpty($BasePath)) {
+        $absolute = [System.IO.Path]::GetFullPath($candidate, $BasePath)
+    } else {
+        $absolute = [System.IO.Path]::GetFullPath($candidate)
+    }
+    $root = [System.IO.Path]::GetPathRoot($absolute)
+    if ($absolute.Length -gt $root.Length) {
+        return $absolute.TrimEnd('\', '/')
+    }
+    return $absolute
+}
+
+function Assert-ContainedPath([string]$Root, [string]$Candidate, [string]$Label) {
+    $resolvedRoot = (Get-NormalizedAbsolutePath $Root).TrimEnd('\') + '\'
+    $resolvedCandidate = Get-NormalizedAbsolutePath $Candidate
+    if (!$resolvedCandidate.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label escaped its disposable root: $resolvedCandidate"
+    }
+    return $resolvedCandidate
+}
+
+function Assert-ExpectedJunction([string]$LinkPath, [string]$ExpectedTarget, [string]$ProfileRoot) {
+    $resolvedLink = Assert-ContainedPath $ProfileRoot $LinkPath 'Packaged dev link'
+    $linkItem = Get-Item -LiteralPath $resolvedLink -Force -ErrorAction Stop
+    if ($linkItem.LinkType -ne 'Junction') {
+        throw "Packaged dev link is not a Junction: $($linkItem.LinkType)"
+    }
+    $targets = @($linkItem.Target)
+    if ($targets.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$targets[0])) {
+        throw "Packaged dev Junction has an invalid target representation: $($targets -join ', ')"
+    }
+    $resolvedTarget = Get-NormalizedAbsolutePath ([string]$targets[0]) (Split-Path -Parent $resolvedLink)
+    $resolvedExpectedTarget = Get-NormalizedAbsolutePath $ExpectedTarget
+    if (![string]::Equals($resolvedExpectedTarget, $resolvedTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Packaged dev Junction target mismatch. Expected $resolvedExpectedTarget, received $resolvedTarget"
+    }
+}
+
+function Remove-ContainedReparseEntry([string]$LinkPath, [string]$ProfileRoot) {
+    $resolvedLink = Assert-ContainedPath $ProfileRoot $LinkPath 'Packaged dev link cleanup'
+    $linkItem = Get-Item -LiteralPath $resolvedLink -Force -ErrorAction SilentlyContinue
+    if ($null -eq $linkItem) { return }
+    if (($linkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+        throw "Refusing to unlink a non-reparse packaged dev entry: $resolvedLink"
+    }
+    Remove-Item -LiteralPath $resolvedLink -Force
+    if ($null -ne (Get-Item -LiteralPath $resolvedLink -Force -ErrorAction SilentlyContinue)) {
+        throw "Packaged dev reparse entry remains after unlink: $resolvedLink"
+    }
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $archive = Join-Path $repoRoot 'dist\claude-plusplus-0.2.9-win-x64.zip'
 $archiveHash = "$archive.sha256"
@@ -16,7 +79,12 @@ if ($expectedHash -ne $actualHash) {
 
 $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $testRoot = Join-Path $tempRoot ('claude-plusplus-package-test-' + [guid]::NewGuid().ToString('N'))
+$profileRoot = Join-Path $testRoot 'profile'
+$mutationTarget = Join-Path $tempRoot ('claude-plusplus-package-link-target-' + [guid]::NewGuid().ToString('N'))
+$mutationSentinel = Join-Path $mutationTarget 'sentinel.txt'
 $extract = Join-Path $testRoot 'extract'
+$liveLink = $null
+$mutationJunctionInstalled = $false
 New-Item -ItemType Directory -Path $extract -Force | Out-Null
 
 try {
@@ -95,6 +163,9 @@ try {
         $env:LOCALAPPDATA = Join-Path $testRoot 'profile\localappdata'
         $env:USERPROFILE = Join-Path $testRoot 'profile'
         New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA, $env:USERPROFILE | Out-Null
+        $liveRoot = Join-Path $env:APPDATA 'claude-plusplus\tweaks'
+        $liveLink = Join-Path $liveRoot 'com.example.package-smoke'
+        $liveMarker = Join-Path $liveRoot '.claudepp-dev-reload'
         $helpOutput = (& $command help 2>&1 | Out-String).Trim()
         if ($LASTEXITCODE -ne 0) {
             throw "Packaged help exited with code $LASTEXITCODE`: $helpOutput"
@@ -139,23 +210,28 @@ try {
         & $command dev $tweakSource --no-watch
         if ($LASTEXITCODE -ne 0) { throw 'Packaged dev --no-watch failed' }
 
-        $liveRoot = Join-Path $env:APPDATA 'claude-plusplus\tweaks'
-        $liveLink = Join-Path $liveRoot 'com.example.package-smoke'
-        if (!(Test-Path -LiteralPath $liveLink)) { throw 'Packaged dev link is missing' }
-        if (((Get-Item -LiteralPath $liveLink -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
-            throw 'Packaged dev link is not a Junction'
-        }
-        $liveMarker = Join-Path $liveRoot '.claudepp-dev-reload'
+        Assert-ExpectedJunction $liveLink $tweakSource $profileRoot
         if (!(Test-Path -LiteralPath $liveMarker)) {
             throw 'Packaged dev reload marker is missing'
         }
+        Assert-ContainedPath $profileRoot $liveMarker 'Packaged dev marker' | Out-Null
 
-        $resolvedProfileRoot = [System.IO.Path]::GetFullPath((Join-Path $testRoot 'profile')).TrimEnd('\') + '\'
-        foreach ($isolatedPath in @($liveLink, $liveMarker)) {
-            $resolvedIsolatedPath = [System.IO.Path]::GetFullPath($isolatedPath)
-            if (!$resolvedIsolatedPath.StartsWith($resolvedProfileRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw "Packaged dev artifact escaped the isolated profile: $resolvedIsolatedPath"
+        New-Item -ItemType Directory -Force -Path $mutationTarget | Out-Null
+        Set-Content -LiteralPath $mutationSentinel -Value 'retained' -NoNewline
+        Remove-ContainedReparseEntry $liveLink $profileRoot
+        New-Item -ItemType Junction -Path $liveLink -Target $mutationTarget | Out-Null
+        $mutationJunctionInstalled = $true
+        $mutationRejected = $false
+        try {
+            Assert-ExpectedJunction $liveLink $tweakSource $profileRoot
+        } catch {
+            if (!$_.Exception.Message.StartsWith('Packaged dev Junction target mismatch.', [System.StringComparison]::Ordinal)) {
+                throw
             }
+            $mutationRejected = $true
+        }
+        if (!$mutationRejected) {
+            throw 'Portable smoke accepted a Junction targeting an external directory'
         }
     } finally {
         $env:PATH = $previousPath
@@ -166,13 +242,43 @@ try {
     if ($output -ne '0.2.9') {
         throw "Expected packaged CLI version 0.2.9, received: $output"
     }
-    Write-Output "Packaged CLI version, status, Doctor, and Tweak authoring passed without system Node.js or npm on PATH."
-    Write-Output "Package SHA-256: $actualHash"
 } finally {
-    $resolvedTestRoot = [System.IO.Path]::GetFullPath($testRoot)
-    if (!$resolvedTestRoot.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $resolvedTestRoot -eq $tempRoot) {
-        throw "Unsafe package-test cleanup target: $resolvedTestRoot"
+    $safeToRemoveDisposableRoots = $false
+    try {
+        if ($null -ne $liveLink) {
+            Remove-ContainedReparseEntry $liveLink $profileRoot
+        }
+        if ($mutationJunctionInstalled) {
+            if (!(Test-Path -LiteralPath $mutationSentinel -PathType Leaf)) {
+                throw 'Defensive packaged dev link cleanup removed the external sentinel'
+            }
+            Write-Output 'Portable smoke rejected an external-target Junction and retained its sentinel during cleanup.'
+            $mutationJunctionInstalled = $false
+        }
+        $safeToRemoveDisposableRoots = $true
+    } finally {
+        if ($safeToRemoveDisposableRoots) {
+            $resolvedTestRoot = Get-NormalizedAbsolutePath $testRoot
+            if (!$resolvedTestRoot.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $resolvedTestRoot -eq $tempRoot) {
+                throw "Unsafe package-test cleanup target: $resolvedTestRoot"
+            }
+            Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
+
+            if (Test-Path -LiteralPath $mutationTarget) {
+                $resolvedMutationTarget = Get-NormalizedAbsolutePath $mutationTarget
+                if (!$resolvedMutationTarget.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+                    $resolvedMutationTarget -eq $tempRoot) {
+                    throw "Unsafe package-link mutation cleanup target: $resolvedMutationTarget"
+                }
+                $mutationTargetItem = Get-Item -LiteralPath $resolvedMutationTarget -Force
+                if (($mutationTargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw "Package-link mutation cleanup root is a reparse point: $resolvedMutationTarget"
+                }
+                Remove-Item -LiteralPath $resolvedMutationTarget -Recurse -Force
+            }
+        }
     }
-    Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
 }
+Write-Output "Packaged CLI version, status, Doctor, and Tweak authoring passed without system Node.js or npm on PATH."
+Write-Output "Package SHA-256: $actualHash"
