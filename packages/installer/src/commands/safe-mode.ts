@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveClaudePlusPlusPaths, type ClaudePlusPlusPaths } from "../paths.js";
 import { writeJsonAtomic } from "../state.js";
@@ -49,7 +49,7 @@ export function runSafeMode(
   paths: ClaudePlusPlusPaths = resolveClaudePlusPlusPaths(),
   dependencies: Partial<SafeModeDependencies> = {},
 ): SafeModeResult {
-  const config = readConfig(paths.configFile);
+  const config = readConfig(paths.configFile, action === "status");
   const current = config.claudePlusPlus?.safeMode === true;
   if (action === "status") {
     return { safeMode: current, changed: false, restartRequired: false };
@@ -66,10 +66,30 @@ export function runSafeMode(
   return { safeMode: enabled, changed: current !== enabled, restartRequired: true };
 }
 
-function readConfig(path: string): ClaudePlusPlusConfig {
+function readConfig(path: string, tolerateInvalid: boolean): ClaudePlusPlusConfig {
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as ClaudePlusPlusConfig;
-  } catch {
-    return {};
+    lstatSync(path);
+  } catch (error) {
+    if (isMissingPathError(error)) return {};
+    return handleInvalidConfig(tolerateInvalid, error);
   }
+
+  try {
+    const config: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (typeof config !== "object" || config === null || Array.isArray(config)) {
+      throw new Error("Config root must be a JSON object");
+    }
+    return config as ClaudePlusPlusConfig;
+  } catch (error) {
+    return handleInvalidConfig(tolerateInvalid, error);
+  }
+}
+
+function handleInvalidConfig(tolerateInvalid: boolean, cause: unknown): ClaudePlusPlusConfig {
+  if (tolerateInvalid) return {};
+  throw new Error("Existing Claude++ config is invalid or unreadable", { cause });
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

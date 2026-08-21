@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -361,6 +362,78 @@ test("Safe Mode status on a fresh profile creates nothing", async () => {
       restartRequired: false,
     });
     assert.equal(existsSync(fixture.paths.configFile), false);
+    assert.equal(existsSync(fixture.paths.tweaks), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("Safe Mode status reads malformed config as disabled without touching its evidence", async () => {
+  const fixture = await createFixture();
+  try {
+    mkdirSync(dirname(fixture.paths.configFile), { recursive: true });
+    const before = '{"claudePlusPlus":';
+    writeFileSync(fixture.paths.configFile, before);
+
+    assert.deepEqual(runSafeMode("status", fixture.paths), {
+      safeMode: false,
+      changed: false,
+      restartRequired: false,
+    });
+    assert.equal(readFileSync(fixture.paths.configFile, "utf8"), before);
+    assert.equal(existsSync(fixture.paths.tweaks), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("Safe Mode mutation refuses malformed config instead of replacing its bytes", async () => {
+  const fixture = await createFixture();
+  try {
+    mkdirSync(dirname(fixture.paths.configFile), { recursive: true });
+    const before = '{"claudePlusPlus":';
+    writeFileSync(fixture.paths.configFile, before);
+
+    assert.throws(
+      () => runSafeMode("on", fixture.paths),
+      /existing Claude\+\+ config is invalid or unreadable/i,
+    );
+    assert.equal(readFileSync(fixture.paths.configFile, "utf8"), before);
+    assert.equal(existsSync(fixture.paths.tweaks), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("Safe Mode mutation rejects non-object config roots instead of rewriting them", async () => {
+  for (const before of ["null", "[]", '"scalar"', "42", "true"]) {
+    const fixture = await createFixture();
+    try {
+      mkdirSync(dirname(fixture.paths.configFile), { recursive: true });
+      writeFileSync(fixture.paths.configFile, before);
+
+      assert.throws(
+        () => runSafeMode("off", fixture.paths),
+        /existing Claude\+\+ config is invalid or unreadable/i,
+      );
+      assert.equal(readFileSync(fixture.paths.configFile, "utf8"), before);
+      assert.equal(existsSync(fixture.paths.tweaks), false);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("Safe Mode mutation refuses a present unreadable config path before any write", async () => {
+  const fixture = await createFixture();
+  try {
+    mkdirSync(fixture.paths.configFile, { recursive: true });
+
+    assert.throws(
+      () => runSafeMode("on", fixture.paths),
+      /existing Claude\+\+ config is invalid or unreadable/i,
+    );
+    assert.equal(statSync(fixture.paths.configFile).isDirectory(), true);
     assert.equal(existsSync(fixture.paths.tweaks), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });

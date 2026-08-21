@@ -17,6 +17,7 @@
 - Watcher remains explicitly opt-in.
 - Safe Mode cold start registers neither Renderer CSP compatibility nor the Claude++ Renderer preload.
 - Safe Mode status performs no filesystem write; enable/disable always refresh the root marker `.claudepp-safe-mode-reload`.
+- Approved Safe Mode divergence (2026-08-21): a missing config defaults normally, but enable/disable must reject a present unreadable, malformed, or non-object config before any config or marker write. Status remains permissive and read-only. Unlike Codex++, invalid evidence is never reset, so the user must repair or remove it manually and the reader must preserve the missing-versus-invalid distinction.
 - Schema 1 state remains readable and is never promoted from an already-patched ASAR.
 - Schema 2 requires lowercase 64-character `originalAsarHash` and `patchedAsarHash` values.
 - ASAR identity is SHA-256 of `@electron/asar.getRawHeader(...).headerString`, not a whole-file digest.
@@ -555,13 +556,15 @@ test("CLI rejects conflicting Safe Mode flags and help explains restart behavior
 });
 ```
 
+Add real temp-filesystem regressions proving across the mutation branches that malformed JSON, representative non-object roots (`null`, array, and scalars), and a present unreadable config path are rejected before any write. Assert the original bytes or path remain unchanged and the Tweaks directory/marker is absent. Also characterize the approved status behavior: its existing permissive read remains non-mutating and does not create Tweaks.
+
 - [ ] **Step 2: Run command and recovery-CLI tests and verify RED**
 
 ```powershell
 node --import tsx --test packages/installer/test/commands.test.ts packages/installer/test/cli-recovery.test.ts
 ```
 
-Expected: FAIL because the new parser/result/marker behavior and Safe Mode recovery-CLI branch do not exist.
+Expected: FAIL because the new parser/result/marker behavior and Safe Mode recovery-CLI branch do not exist. In the invalid-config regression cycle, mutation tests must also fail against the permissive reader because malformed evidence is replaced, non-object roots are accepted or crash later, and unreadable paths reach the atomic writer.
 
 - [ ] **Step 3: Implement Safe Mode command behavior**
 
@@ -583,7 +586,7 @@ export function runSafeMode(
   paths: ClaudePlusPlusPaths = resolveClaudePlusPlusPaths(),
   dependencies: Partial<SafeModeDependencies> = {},
 ): SafeModeResult {
-  const config = readConfig(paths.configFile);
+  const config = readConfig(paths.configFile, action === "status");
   const current = config.claudePlusPlus?.safeMode === true;
   if (action === "status") {
     return { safeMode: current, changed: false, restartRequired: false };
@@ -601,13 +604,15 @@ export function runSafeMode(
 }
 ```
 
+The validity-aware `readConfig` must first distinguish a genuinely missing path from a present unreadable path. It parses only JSON object roots, rejecting `null`, arrays, and scalars. Invalid input may fall back to `{}` only for `status`; `on` and `off` throw the stable recovery error before `writeJsonAtomic`, Tweaks directory creation, or marker refresh. Do not copy Codex++'s permissive mutation fallback: this is the approved 2026-08-21 safety divergence, and users must repair or remove damaged config evidence manually.
+
 Implement `parseSafeModeArguments` with a seen-action set so duplicate and conflicting actions have distinct errors. Update CLI dispatch and help to use the parser and describe all flags plus restart semantics.
 
 In `cli-recovery.ts`, add an injectable `safeMode(action)` dependency, map the supplied `args` through `parseSafeModeArguments`, and write the returned `SafeModeResult` unchanged to `io.stdout`. Add exported `RECOVERY_HELP_TEXT` containing the Safe Mode command shape/restart guidance and uninstall line; interpolate that constant into the existing `cli.ts` help so the tested string is the displayed string.
 
 - [ ] **Step 4: Run the focused tests and verify GREEN**
 
-Run `commands.test.ts` and `cli-recovery.test.ts`. Expected: all Safe Mode tests PASS, including no-write status, repeat-marker refresh, command-argument JSON, conflict errors, and restart help.
+Run `commands.test.ts` and `cli-recovery.test.ts`. Expected: all Safe Mode tests PASS, including no-write status, repeat-marker refresh, command-argument JSON, conflict errors, restart help, preserved invalid status evidence, and refusal to mutate malformed, non-object, or unreadable existing configs.
 
 - [ ] **Step 5: Run the Installer build**
 

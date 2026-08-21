@@ -33,6 +33,8 @@ Claude++ currently deletes only the package directory derived from valid install
 
 Claude++ currently accepts only implicit Safe Mode enable and `--off`, changes only `config.json`, and registers its Renderer preload even when Safe Mode was active at startup. Codex++ supports `--on`, `--off`, and `--status`, rejects conflicting actions, touches a watched reload marker, and omits the preload on a Safe Mode cold start.
 
+Codex++ treats missing, unreadable, or malformed Safe Mode configuration as an empty object and does not validate a successfully parsed root. Its enable/disable path may therefore replace invalid existing evidence, crash on `null`, or report success while array properties disappear during serialization. On 2026-08-21 the user approved a safety divergence for Claude++: only a genuinely missing config defaults to an empty object; mutation refuses any present config that cannot be read and validated as a JSON object.
+
 Claude++ currently treats valid Loader metadata as proof that the managed ASAR is ready. Codex++ records the original and patched ASAR raw-header SHA-256 values and compares the current header against both.
 
 ## Uninstall Cleanup
@@ -80,9 +82,11 @@ claudeplusplus safe-mode --status
 
 No flag and `--on` both enable Safe Mode. Exactly one of `--on`, `--off`, or `--status` may be present. Duplicate or conflicting action flags are rejected. Unknown Safe Mode flags are rejected.
 
-`--status` reads and returns the current state without creating or modifying `config.json`, the Tweaks directory, or a reload marker.
+`--status` retains its existing read-only behavior and returns without creating or modifying `config.json`, the Tweaks directory, or a reload marker. Invalid evidence is never rewritten by status.
 
 Enable and disable preserve every unknown root key, every unknown `claudePlusPlus` key, and all per-Tweak enabled flags. The existing atomic JSON writer remains the persistence mechanism.
+
+For enable and disable, a genuinely missing config still defaults normally. If the config path exists but is unreadable, contains malformed JSON, or parses to `null`, an array, or any scalar root, the command throws before writing config or creating or refreshing the Tweaks marker. The original bytes or path remain untouched. This intentionally differs from installed Codex++ so a recovery command cannot destroy invalid evidence. The user-visible and maintenance cost is that the user must repair or remove the damaged config manually; the reader must continue to distinguish absence from invalidity and validate the root before any mutation.
 
 The command returns JSON containing the resulting `safeMode` value, whether configuration changed, and whether a restart is required for complete Renderer application. Human-facing help explains that active Main Tweaks are reloaded immediately but a running Claude process should be restarted to guarantee the Renderer preload/CSP state matches the new mode.
 
