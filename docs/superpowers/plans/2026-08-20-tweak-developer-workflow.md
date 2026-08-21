@@ -385,6 +385,8 @@ Add exact override assertions for `id`, `name`, `repo`, and scope. Parse `packag
 
 Load each generated CommonJS entry with `createRequire(import.meta.url)` and execute it against strict fake APIs. For Main, capture `ipc.handle(channel, handler)`, assert `channel === "ping"`, and assert the handler returns the generated pong text. For Renderer, capture the `registerPage` result, call `stop()`, and assert its `unregister()` runs. For both, execute separate freshly loaded module instances for Main and Renderer, assert Main handles `"ping"`, Renderer invokes `"ping"`, and the Settings handle is released. These executable tests must fail if a template passes a pre-namespaced channel that `tweakChannel` rejects.
 
+For every generated scope, also assert that the loaded module exports callable `start` and `stop` functions. Invoke the Main-only template's `stop()` and assert it completes without throwing, so all three scaffolds protect the required cleanup hook rather than only documenting it.
+
 Add refusal tests for an existing file, a non-empty directory even with `force: true`, and an empty directory without `force`. Assert an empty directory with `force: true` succeeds. For no-partial output:
 
 ```ts
@@ -589,6 +591,8 @@ function assertImmediateTweakLink(linkPath: string, paths: ClaudePlusPlusPaths):
 ```
 
 Canonicalize the source with `realpathSync` and require a directory. Detect the destination with `lstatSync(linkPath, { throwIfNoEntry: false })`, not `existsSync`, so dangling Junctions are visible. Reject non-symbolic links. If `existsSync(linkPath)` is false after a reparse-point `lstat`, reject it as broken. Otherwise resolve the target with `realpathSync(linkPath)`, catch and report malformed targets, require the result to be a directory, and compare canonical paths case-insensitively. If it is the same source, return `current`; if different and `replace` is false, throw; if different and `replace` is true, re-run containment/reparse checks immediately before `rmSync(linkPath, { recursive: true, force: true })`, then create the Junction.
+
+After source validation, immediate-child containment, and every collision/refusal preflight has succeeded, create `paths.tweaks` with `mkdirSync(paths.tweaks, { recursive: true })` immediately before creating a new Junction. Do not create the live Tweaks root for an invalid source, unsupported platform, invalid name, real-file/directory collision, broken link, or wrong-source collision without `--replace`.
 
 Create links only with:
 
