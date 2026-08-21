@@ -727,6 +727,33 @@ test("status, debug, doctor, and launch expose the managed installation safely",
   }
 });
 
+test("schema 2 drift is not installed when every other readiness gate passes", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const state = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(state?.schemaVersion === 2);
+    const mismatchedPatchedHash = "0".repeat(64);
+    assert.notEqual(state.patchedAsarHash, mismatchedPatchedHash);
+    writeFileSync(
+      fixture.paths.stateFile,
+      JSON.stringify({ ...state, patchedAsarHash: mismatchedPatchedHash }),
+    );
+
+    const status = getClaudePlusPlusStatus(fixture.paths);
+
+    assert.equal(status.asarProvenance, "drift");
+    assert.equal(status.loaderReady, true);
+    assert.equal(status.integrityFuseReady, true);
+    assert.equal(status.runtimeReady, true);
+    assert.equal(status.managedExecutable, state.managedExecutable);
+    assert.equal(existsSync(state.managedExecutable), true);
+    assert.equal(status.installed, false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("status and Doctor distinguish original, drifted, unreadable, and legacy ASARs", async () => {
   const fixture = await createFixture();
   try {
