@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -15,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { inspectClaudePlusPlusLoader } from "../src/asar.ts";
+import { inspectClaudePlusPlusLoader, readAsarHeaderHash } from "../src/asar.ts";
 import {
   installClaudePlusPlus,
   resolveInstallerSourceRoot,
@@ -30,7 +31,11 @@ import { getClaudePlusPlusStatus } from "../src/commands/status.ts";
 import { uninstallClaudePlusPlus } from "../src/commands/uninstall.ts";
 import type { ClaudeInstall } from "../src/platform.ts";
 import { resolveClaudePlusPlusPaths } from "../src/paths.ts";
-import { readClaudePlusPlusState } from "../src/state.ts";
+import {
+  readClaudePlusPlusState,
+  type ClaudePlusPlusStateV2,
+} from "../src/state.ts";
+import type { MirrorFileSystem } from "../src/windows-store-mirror.ts";
 
 test("resolves the release source root from packages/installer/dist", () => {
   const releaseRoot = resolve("fixture-release");
@@ -48,6 +53,12 @@ test("installs a real managed mirror, Loader, Runtime, state, and shortcut idemp
     const state = readClaudePlusPlusState(fixture.paths.stateFile);
     assert.equal(first.status, "installed");
     assert.ok(state);
+    assert.equal(state.schemaVersion, 2);
+    if (state.schemaVersion !== 2) assert.fail("expected schema 2 state");
+    assert.match(state.originalAsarHash, /^[0-9a-f]{64}$/);
+    assert.match(state.patchedAsarHash, /^[0-9a-f]{64}$/);
+    assert.notEqual(state.originalAsarHash, state.patchedAsarHash);
+    assert.equal(readAsarHeaderHash(state.asarPath), state.patchedAsarHash);
     assert.equal(state.watcher, "none");
     assert.equal(state.packageVersion, "1.0.0.0");
     assert.equal(readFileSync(join(fixture.paths.runtime, "main.js"), "utf8"), "module.exports = {};\n");
@@ -58,10 +69,123 @@ test("installs a real managed mirror, Loader, Runtime, state, and shortcut idemp
     writeFileSync(join(state.managedAppRoot, "managed-only.txt"), "keep");
     writeFileSync(join(fixture.install.appRoot, "late-official.txt"), "do-not-copy");
     const second = await installClaudePlusPlus(fixture.options, fixture.deps);
+    const maintained = readClaudePlusPlusState(fixture.paths.stateFile);
 
     assert.equal(second.status, "current");
+    assert.ok(maintained?.schemaVersion === 2);
+    assert.equal(maintained.originalAsarHash, state.originalAsarHash);
     assert.equal(readFileSync(join(state.managedAppRoot, "managed-only.txt"), "utf8"), "keep");
     assert.equal(existsSync(join(state.managedAppRoot, "late-official.txt")), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("maintenance rebuilds a legacy reused mirror before migrating to schema 2", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const current = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(current && current.schemaVersion === 2);
+    const { originalAsarHash: _original, patchedAsarHash: _patched, ...common } = current;
+    writeFileSync(fixture.paths.stateFile, JSON.stringify({ ...common, schemaVersion: 1 }));
+    writeFileSync(join(current.managedAppRoot, "managed-only.txt"), "remove");
+
+    const result = await installClaudePlusPlus(fixture.options, fixture.deps);
+    const migrated = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.equal(result.status, "installed");
+    assert.equal(migrated?.schemaVersion, 2);
+    assert.equal(existsSync(join(current.managedAppRoot, "managed-only.txt")), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of [
+  {
+    name: "original ASAR",
+    mutate: async (fixture, state) => copyFileSync(fixture.install.asarPath, state.asarPath),
+  },
+  {
+    name: "drifted ASAR",
+    mutate: async (fixture, state) => writeReplacementAsar(state.asarPath, fixture.root),
+  },
+  {
+    name: "unreadable ASAR",
+    mutate: async (_fixture, state) => writeFileSync(state.asarPath, "not an asar"),
+  },
+  {
+    name: "missing state",
+    mutate: async (fixture, _state) => rmSync(fixture.paths.stateFile, { force: true }),
+  },
+  {
+    name: "malformed state",
+    mutate: async (fixture, _state) => writeFileSync(fixture.paths.stateFile, "{ malformed"),
+  },
+  {
+    name: "mismatched schema 2 package identity",
+    mutate: async (fixture, state) => writeFileSync(
+      fixture.paths.stateFile,
+      JSON.stringify({ ...state, packageVersion: "9.9.9.9" }),
+    ),
+  },
+] satisfies Array<{
+  name: string;
+  mutate(
+    fixture: Awaited<ReturnType<typeof createFixture>>,
+    state: ClaudePlusPlusStateV2,
+  ): Promise<unknown>;
+}>) {
+  test(`maintenance cleanly refreshes a reused mirror with ${scenario.name}`, async () => {
+    const fixture = await createFixture();
+    try {
+      await installClaudePlusPlus(fixture.options, fixture.deps);
+      const state = readClaudePlusPlusState(fixture.paths.stateFile);
+      assert.ok(state?.schemaVersion === 2);
+      writeFileSync(join(state.managedAppRoot, "managed-only.txt"), "remove");
+      await scenario.mutate(fixture, state);
+
+      const result = await installClaudePlusPlus(fixture.options, fixture.deps);
+      const repaired = readClaudePlusPlusState(fixture.paths.stateFile);
+      assert.equal(result.status, "installed");
+      assert.ok(repaired?.schemaVersion === 2);
+      assert.equal(repaired.originalAsarHash, readAsarHeaderHash(fixture.install.asarPath));
+      assert.equal(readAsarHeaderHash(repaired.asarPath), repaired.patchedAsarHash);
+      assert.notEqual(repaired.originalAsarHash, repaired.patchedAsarHash);
+      assert.equal(existsSync(join(state.managedAppRoot, "managed-only.txt")), false);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("failed forced install refresh restores the mirror and preserves state byte-for-byte", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const state = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(state?.schemaVersion === 2);
+    const stateBefore = readFileSync(fixture.paths.stateFile);
+    writeFileSync(join(state.managedAppRoot, "sentinel.txt"), "old");
+    const mirrorFileSystem: MirrorFileSystem = {
+      rename: async (source, target) => {
+        if (source.includes(".staging-") && target === state.managedAppRoot) {
+          throw new Error("simulated install refresh failure");
+        }
+        renameSync(source, target);
+      },
+    };
+
+    await assert.rejects(
+      installClaudePlusPlus(
+        { ...fixture.options, force: true },
+        { ...fixture.deps, mirrorFileSystem },
+      ),
+      /simulated install refresh failure/,
+    );
+    assert.deepEqual(readFileSync(fixture.paths.stateFile), stateBefore);
+    assert.equal(readFileSync(join(state.managedAppRoot, "sentinel.txt"), "utf8"), "old");
+    assert.equal(readAsarHeaderHash(state.asarPath), state.patchedAsarHash);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -729,6 +853,19 @@ test("uninstall attempts Watcher cleanup even when installer state is missing", 
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+async function writeReplacementAsar(target: string, root: string): Promise<void> {
+  const source = join(root, "replacement-asar-source");
+  rmSync(source, { recursive: true, force: true });
+  mkdirSync(source, { recursive: true });
+  writeFileSync(
+    join(source, "package.json"),
+    JSON.stringify({ name: "replacement", main: "index.js" }),
+  );
+  writeFileSync(join(source, "index.js"), "module.exports = 'replacement';\n");
+  rmSync(target, { force: true });
+  await asar.createPackage(source, target);
+}
 
 async function createFixture() {
   const root = mkdtempSync(join(tmpdir(), "claudepp-commands-"));

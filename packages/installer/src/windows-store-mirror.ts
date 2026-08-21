@@ -22,6 +22,7 @@ export interface ManagedMirrorResult {
 
 export interface MirrorFileSystem {
   rename?(source: string, target: string): Promise<void>;
+  forceRefresh?: boolean;
 }
 
 export interface ManagedMirrorMarker {
@@ -75,7 +76,9 @@ export async function ensureWindowsStoreMirror(
   const backup = `${target}.backup-${randomUUID()}`;
   for (const path of [target, staging, backup]) assertManagedMirrorPath(path, paths);
 
-  if (await isCurrentMirror(target, install)) return resultFor(target, true);
+  if (!fileSystem.forceRefresh && await isCurrentMirror(target, install)) {
+    return resultFor(target, true);
+  }
 
   const renamePath = fileSystem.rename ?? rename;
   let oldTargetMoved = false;

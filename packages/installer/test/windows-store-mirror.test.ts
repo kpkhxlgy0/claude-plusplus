@@ -61,6 +61,53 @@ test("creates an idempotent managed mirror without writing the official app", as
   }
 });
 
+test("force refresh replaces a current marked mirror from the official source", async () => {
+  const fixture = createFixture();
+  try {
+    const first = await ensureWindowsStoreMirror(fixture.install, fixture.paths);
+    writeFileSync(join(first.appRoot, "managed-only.txt"), "remove");
+    writeFileSync(join(fixture.source, "official-new.txt"), "copy");
+
+    const second = await ensureWindowsStoreMirror(
+      fixture.install,
+      fixture.paths,
+      { forceRefresh: true },
+    );
+
+    assert.equal(second.reused, false);
+    assert.equal(existsSync(join(second.appRoot, "managed-only.txt")), false);
+    assert.equal(readFileSync(join(second.appRoot, "official-new.txt"), "utf8"), "copy");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("failed force refresh restores the current mirror", async () => {
+  const fixture = createFixture();
+  try {
+    const first = await ensureWindowsStoreMirror(fixture.install, fixture.paths);
+    writeFileSync(join(first.appRoot, "sentinel.txt"), "old");
+    writeFileSync(join(fixture.source, "sentinel.txt"), "new");
+    const fileSystem: MirrorFileSystem = {
+      forceRefresh: true,
+      rename: async (source, target) => {
+        if (source.includes(".staging-") && target === first.appRoot) {
+          throw new Error("simulated force-refresh failure");
+        }
+        renameSync(source, target);
+      },
+    };
+
+    await assert.rejects(
+      ensureWindowsStoreMirror(fixture.install, fixture.paths, fileSystem),
+      /simulated force-refresh failure/,
+    );
+    assert.equal(readFileSync(join(first.appRoot, "sentinel.txt"), "utf8"), "old");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("rejects a managed target outside the Claude++ store-apps root", () => {
   const fixture = createFixture();
   try {

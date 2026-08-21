@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import {
   injectClaudePlusPlusLoader,
   inspectClaudePlusPlusLoader,
+  readAsarHeaderHash,
 } from "../asar.js";
 import {
   disableEmbeddedAsarIntegrityValidation,
@@ -21,13 +22,17 @@ import {
 import { discoverClaudeInstall, type ClaudeInstall } from "../platform.js";
 import {
   readClaudePlusPlusState,
+  isClaudePlusPlusStateV2,
   writeClaudePlusPlusState,
   writeJsonAtomic,
   type ClaudePlusPlusState,
+  type ClaudePlusPlusStateV2,
 } from "../state.js";
 import {
   cleanupOldWindowsStoreMirrors,
   ensureWindowsStoreMirror,
+  type ManagedMirrorResult,
+  type MirrorFileSystem,
 } from "../windows-store-mirror.js";
 
 const version = "0.2.9";
@@ -46,6 +51,7 @@ export interface InstallCommandDeps {
   discover(): Promise<ClaudeInstall>;
   createShortcut(target: string, shortcut: string): Promise<void>;
   now(): Date;
+  mirrorFileSystem?: MirrorFileSystem;
 }
 
 export interface InstallCommandResult {
@@ -64,12 +70,29 @@ export async function installClaudePlusPlus(
   const now = dependencies.now ?? (() => new Date());
   const migratedConfig = readMigratedRuntimeConfig(paths.configFile);
   const official = await discover();
-  const mirror = await ensureWindowsStoreMirror(official, paths);
   const existingState = readClaudePlusPlusState(paths.stateFile);
+  const mirrorFileSystem = dependencies.mirrorFileSystem ?? {};
+  let mirror = await ensureWindowsStoreMirror(official, paths, mirrorFileSystem);
+  let currentHash = safeReadAsarHeaderHash(mirror.asarPath);
+  let trustedState = trustedPatchedState(existingState, official, mirror, currentHash);
+
+  if (mirror.reused && (options.force || trustedState === null)) {
+    mirror = await ensureWindowsStoreMirror(official, paths, {
+      ...mirrorFileSystem,
+      forceRefresh: true,
+    });
+    currentHash = readAsarHeaderHash(mirror.asarPath);
+    trustedState = null;
+  }
+
+  const originalAsarHash = trustedState
+    ? trustedState.originalAsarHash
+    : readAsarHeaderHash(mirror.asarPath);
   const existingLoader = inspectClaudePlusPlusLoader(mirror.asarPath);
   const isCurrent =
     !options.force &&
     mirror.reused &&
+    trustedState !== null &&
     existingState?.packageFullName === official.packageFullName &&
     existingState.packageVersion === official.packageVersion &&
     existingLoader?.metadata.loaderVersion === version &&
@@ -105,8 +128,9 @@ export async function installClaudePlusPlus(
     userRoot: paths.roamingRoot,
     loaderVersion: version,
   }, paths);
-  const state: ClaudePlusPlusState = {
-    schemaVersion: 1,
+  const patchedAsarHash = readAsarHeaderHash(mirror.asarPath);
+  const state: ClaudePlusPlusStateV2 = {
+    schemaVersion: 2,
     claudePlusPlusVersion: version,
     packageFullName: official.packageFullName,
     packageVersion: official.packageVersion,
@@ -115,6 +139,8 @@ export async function installClaudePlusPlus(
     managedExecutable: mirror.executablePath,
     asarPath: mirror.asarPath,
     originalMain: inspection.originalMain,
+    originalAsarHash,
+    patchedAsarHash,
     installedAt: now().toISOString(),
     watcher: existingState?.watcher ?? "none",
   };
@@ -125,6 +151,29 @@ export async function installClaudePlusPlus(
   }
   writeJsonAtomic(paths.configFile, migratedConfig);
   return { status: "installed", state };
+}
+
+function trustedPatchedState(
+  state: ClaudePlusPlusState | null,
+  official: ClaudeInstall,
+  mirror: ManagedMirrorResult,
+  currentHash: string | null,
+): ClaudePlusPlusStateV2 | null {
+  return mirror.reused &&
+    isClaudePlusPlusStateV2(state) &&
+    state.packageFullName === official.packageFullName &&
+    state.packageVersion === official.packageVersion &&
+    currentHash === state.patchedAsarHash
+    ? state
+    : null;
+}
+
+function safeReadAsarHeaderHash(asarPath: string): string | null {
+  try {
+    return readAsarHeaderHash(asarPath);
+  } catch {
+    return null;
+  }
 }
 
 function readMigratedRuntimeConfig(path: string): Record<string, unknown> {
