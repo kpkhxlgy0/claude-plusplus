@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -16,6 +17,7 @@ import { resolveClaudePlusPlusPaths } from "../src/paths.ts";
 import {
   assertManagedMirrorPath,
   ensureWindowsStoreMirror,
+  prepareWindowsStoreMirror,
   type MirrorFileSystem,
 } from "../src/windows-store-mirror.ts";
 
@@ -77,6 +79,89 @@ test("force refresh replaces a current marked mirror from the official source", 
     assert.equal(second.reused, false);
     assert.equal(existsSync(join(second.appRoot, "managed-only.txt")), false);
     assert.equal(readFileSync(join(second.appRoot, "official-new.txt"), "utf8"), "copy");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a prepared force refresh can restore the previous mirror", async () => {
+  const fixture = createFixture();
+  try {
+    const first = await ensureWindowsStoreMirror(fixture.install, fixture.paths);
+    writeFileSync(join(first.appRoot, "sentinel.txt"), "old");
+    writeFileSync(join(fixture.source, "sentinel.txt"), "new");
+
+    const prepared = await prepareWindowsStoreMirror(
+      fixture.install,
+      fixture.paths,
+      { forceRefresh: true },
+    );
+
+    assert.equal(readFileSync(join(prepared.mirror.appRoot, "sentinel.txt"), "utf8"), "new");
+    await prepared.rollback();
+    assert.equal(readFileSync(join(first.appRoot, "sentinel.txt"), "utf8"), "old");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rolling back a prepared first mirror removes the incomplete target", async () => {
+  const fixture = createFixture();
+  try {
+    const prepared = await prepareWindowsStoreMirror(fixture.install, fixture.paths);
+
+    assert.equal(existsSync(prepared.mirror.appRoot), true);
+    await prepared.rollback();
+    assert.equal(existsSync(prepared.mirror.appRoot), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("committing a prepared refresh removes its previous-mirror backup", async () => {
+  const fixture = createFixture();
+  try {
+    const first = await ensureWindowsStoreMirror(fixture.install, fixture.paths);
+    writeFileSync(join(first.appRoot, "sentinel.txt"), "old");
+    writeFileSync(join(fixture.source, "sentinel.txt"), "new");
+
+    const prepared = await prepareWindowsStoreMirror(
+      fixture.install,
+      fixture.paths,
+      { forceRefresh: true },
+    );
+    await prepared.commit();
+
+    assert.equal(readFileSync(join(first.appRoot, "sentinel.txt"), "utf8"), "new");
+    assert.deepEqual(
+      readdirSync(join(fixture.paths.storeApps, fixture.install.packageFullName))
+        .filter((entry) => entry.includes(".backup-")),
+      [],
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a failed commit cleanup stays logically committed and cannot restore stale bytes", async () => {
+  const fixture = createFixture();
+  try {
+    const first = await ensureWindowsStoreMirror(fixture.install, fixture.paths);
+    writeFileSync(join(first.appRoot, "sentinel.txt"), "old");
+    writeFileSync(join(fixture.source, "sentinel.txt"), "new");
+    const fileSystem: MirrorFileSystem = {
+      forceRefresh: true,
+      remove: async (path) => {
+        if (path.includes(".backup-")) throw new Error("simulated backup cleanup failure");
+        rmSync(path, { recursive: true, force: true });
+      },
+    };
+    const prepared = await prepareWindowsStoreMirror(fixture.install, fixture.paths, fileSystem);
+
+    await assert.rejects(prepared.commit(), /simulated backup cleanup failure/);
+    await prepared.rollback();
+
+    assert.equal(readFileSync(join(first.appRoot, "sentinel.txt"), "utf8"), "new");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

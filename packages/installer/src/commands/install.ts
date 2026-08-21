@@ -30,7 +30,7 @@ import {
 } from "../state.js";
 import {
   cleanupOldWindowsStoreMirrors,
-  ensureWindowsStoreMirror,
+  prepareWindowsStoreMirror,
   type ManagedMirrorResult,
   type MirrorFileSystem,
 } from "../windows-store-mirror.js";
@@ -72,85 +72,96 @@ export async function installClaudePlusPlus(
   const official = await discover();
   const existingState = readClaudePlusPlusState(paths.stateFile);
   const mirrorFileSystem = dependencies.mirrorFileSystem ?? {};
-  let mirror = await ensureWindowsStoreMirror(official, paths, mirrorFileSystem);
-  let currentHash = safeReadAsarHeaderHash(mirror.asarPath);
-  let trustedState = trustedPatchedState(existingState, official, mirror, currentHash);
+  let prepared = await prepareWindowsStoreMirror(official, paths, mirrorFileSystem);
 
-  if (mirror.reused && (options.force || trustedState === null)) {
-    mirror = await ensureWindowsStoreMirror(official, paths, {
-      ...mirrorFileSystem,
-      forceRefresh: true,
-    });
-    currentHash = readAsarHeaderHash(mirror.asarPath);
-    trustedState = null;
-  }
+  try {
+    let mirror = prepared.mirror;
+    let currentHash = safeReadAsarHeaderHash(mirror.asarPath);
+    let trustedState = trustedPatchedState(existingState, official, mirror, currentHash);
 
-  const originalAsarHash = trustedState
-    ? trustedState.originalAsarHash
-    : readAsarHeaderHash(mirror.asarPath);
-  const existingLoader = inspectClaudePlusPlusLoader(mirror.asarPath);
-  const isCurrent =
-    !options.force &&
-    mirror.reused &&
-    trustedState !== null &&
-    existingState?.packageFullName === official.packageFullName &&
-    existingState.packageVersion === official.packageVersion &&
-    existingLoader?.metadata.loaderVersion === version &&
-    isEmbeddedAsarIntegrityValidationDisabled(mirror.executablePath) &&
-    existsSync(join(paths.runtime, "main.js")) &&
-    existsSync(join(paths.runtime, "preload", "index.js"));
+    if (mirror.reused && (options.force || trustedState === null)) {
+      await prepared.commit();
+      prepared = await prepareWindowsStoreMirror(official, paths, {
+        ...mirrorFileSystem,
+        forceRefresh: true,
+      });
+      mirror = prepared.mirror;
+      currentHash = readAsarHeaderHash(mirror.asarPath);
+      trustedState = null;
+    }
 
-  if (isCurrent && existingState) {
-    if (options.watcher) return { status: "current", state: existingState };
+    const originalAsarHash = trustedState
+      ? trustedState.originalAsarHash
+      : readAsarHeaderHash(mirror.asarPath);
+    const existingLoader = inspectClaudePlusPlusLoader(mirror.asarPath);
+    const isCurrent =
+      !options.force &&
+      mirror.reused &&
+      trustedState !== null &&
+      existingState?.packageFullName === official.packageFullName &&
+      existingState.packageVersion === official.packageVersion &&
+      existingLoader?.metadata.loaderVersion === version &&
+      isEmbeddedAsarIntegrityValidationDisabled(mirror.executablePath) &&
+      existsSync(join(paths.runtime, "main.js")) &&
+      existsSync(join(paths.runtime, "preload", "index.js"));
+
+    if (isCurrent && existingState) {
+      await prepared.commit();
+      if (options.watcher) return { status: "current", state: existingState };
+      await copyRuntimeAtomically(
+        join(sourceRoot, "packages", "runtime", "dist"),
+        paths,
+      );
+      if (!existsSync(paths.shortcutFile)) {
+        await createShortcut(existingState.managedExecutable, paths.shortcutFile);
+      }
+      if (options.cleanupAllOld) {
+        await cleanupOldWindowsStoreMirrors(paths, official.packageFullName);
+      }
+      writeJsonAtomic(paths.configFile, migratedConfig);
+      return { status: "current", state: existingState };
+    }
+
     await copyRuntimeAtomically(
       join(sourceRoot, "packages", "runtime", "dist"),
       paths,
     );
-    if (!existsSync(paths.shortcutFile)) {
-      await createShortcut(existingState.managedExecutable, paths.shortcutFile);
-    }
+    disableEmbeddedAsarIntegrityValidation(mirror.executablePath);
+    const inspection = await injectClaudePlusPlusLoader({
+      managedAppRoot: mirror.appRoot,
+      asarPath: mirror.asarPath,
+      loaderPath: join(sourceRoot, "packages", "loader", "loader.cjs"),
+      userRoot: paths.roamingRoot,
+      loaderVersion: version,
+    }, paths);
+    const patchedAsarHash = readAsarHeaderHash(mirror.asarPath);
+    const state: ClaudePlusPlusStateV2 = {
+      schemaVersion: 2,
+      claudePlusPlusVersion: version,
+      packageFullName: official.packageFullName,
+      packageVersion: official.packageVersion,
+      officialAppRoot: official.appRoot,
+      managedAppRoot: mirror.appRoot,
+      managedExecutable: mirror.executablePath,
+      asarPath: mirror.asarPath,
+      originalMain: inspection.originalMain,
+      originalAsarHash,
+      patchedAsarHash,
+      installedAt: now().toISOString(),
+      watcher: existingState?.watcher ?? "none",
+    };
+    writeClaudePlusPlusState(paths.stateFile, state);
+    await prepared.commit();
+    await createShortcut(state.managedExecutable, paths.shortcutFile);
     if (options.cleanupAllOld) {
       await cleanupOldWindowsStoreMirrors(paths, official.packageFullName);
     }
     writeJsonAtomic(paths.configFile, migratedConfig);
-    return { status: "current", state: existingState };
+    return { status: "installed", state };
+  } catch (error) {
+    await prepared.rollback();
+    throw error;
   }
-
-  await copyRuntimeAtomically(
-    join(sourceRoot, "packages", "runtime", "dist"),
-    paths,
-  );
-  disableEmbeddedAsarIntegrityValidation(mirror.executablePath);
-  const inspection = await injectClaudePlusPlusLoader({
-    managedAppRoot: mirror.appRoot,
-    asarPath: mirror.asarPath,
-    loaderPath: join(sourceRoot, "packages", "loader", "loader.cjs"),
-    userRoot: paths.roamingRoot,
-    loaderVersion: version,
-  }, paths);
-  const patchedAsarHash = readAsarHeaderHash(mirror.asarPath);
-  const state: ClaudePlusPlusStateV2 = {
-    schemaVersion: 2,
-    claudePlusPlusVersion: version,
-    packageFullName: official.packageFullName,
-    packageVersion: official.packageVersion,
-    officialAppRoot: official.appRoot,
-    managedAppRoot: mirror.appRoot,
-    managedExecutable: mirror.executablePath,
-    asarPath: mirror.asarPath,
-    originalMain: inspection.originalMain,
-    originalAsarHash,
-    patchedAsarHash,
-    installedAt: now().toISOString(),
-    watcher: existingState?.watcher ?? "none",
-  };
-  writeClaudePlusPlusState(paths.stateFile, state);
-  await createShortcut(state.managedExecutable, paths.shortcutFile);
-  if (options.cleanupAllOld) {
-    await cleanupOldWindowsStoreMirrors(paths, official.packageFullName);
-  }
-  writeJsonAtomic(paths.configFile, migratedConfig);
-  return { status: "installed", state };
 }
 
 function trustedPatchedState(

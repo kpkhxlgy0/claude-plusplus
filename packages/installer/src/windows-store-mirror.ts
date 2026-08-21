@@ -22,7 +22,14 @@ export interface ManagedMirrorResult {
 
 export interface MirrorFileSystem {
   rename?(source: string, target: string): Promise<void>;
+  remove?(path: string): Promise<void>;
   forceRefresh?: boolean;
+}
+
+export interface PreparedManagedMirror {
+  mirror: ManagedMirrorResult;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
 }
 
 export interface ManagedMirrorMarker {
@@ -71,17 +78,29 @@ export async function ensureWindowsStoreMirror(
   paths: ClaudePlusPlusPaths,
   fileSystem: MirrorFileSystem = {},
 ): Promise<ManagedMirrorResult> {
+  const prepared = await prepareWindowsStoreMirror(install, paths, fileSystem);
+  await prepared.commit();
+  return prepared.mirror;
+}
+
+export async function prepareWindowsStoreMirror(
+  install: ClaudeInstall,
+  paths: ClaudePlusPlusPaths,
+  fileSystem: MirrorFileSystem = {},
+): Promise<PreparedManagedMirror> {
   const target = join(paths.storeApps, install.packageFullName, "app");
   const staging = `${target}.staging-${randomUUID()}`;
   const backup = `${target}.backup-${randomUUID()}`;
   for (const path of [target, staging, backup]) assertManagedMirrorPath(path, paths);
 
   if (!fileSystem.forceRefresh && await isCurrentMirror(target, install)) {
-    return resultFor(target, true);
+    return settledMirror(resultFor(target, true));
   }
 
   const renamePath = fileSystem.rename ?? rename;
+  const removePath = fileSystem.remove ?? removeRecursively;
   let oldTargetMoved = false;
+  let replacementInstalled = false;
   await mkdir(dirname(target), { recursive: true });
 
   try {
@@ -101,18 +120,71 @@ export async function ensureWindowsStoreMirror(
     }
 
     await renamePath(staging, target);
+    replacementInstalled = true;
     await verifyMirrorFiles(target);
-    if (oldTargetMoved) await guardedRemove(backup, paths);
-    return resultFor(target, false);
+    return preparedMirror({
+      mirror: resultFor(target, false),
+      target,
+      backup,
+      hadPreviousTarget: oldTargetMoved,
+      paths,
+      renamePath,
+      removePath,
+    });
   } catch (error) {
+    if (replacementInstalled && await pathExists(target)) {
+      await guardedRemove(target, paths, removePath);
+    }
     if (oldTargetMoved && await pathExists(backup)) {
-      if (await pathExists(target)) await guardedRemove(target, paths);
       await renamePath(backup, target);
     }
     throw error;
   } finally {
-    if (await pathExists(staging)) await guardedRemove(staging, paths);
+    if (await pathExists(staging)) await guardedRemove(staging, paths, removePath);
   }
+}
+
+function settledMirror(mirror: ManagedMirrorResult): PreparedManagedMirror {
+  return {
+    mirror,
+    commit: async () => {},
+    rollback: async () => {},
+  };
+}
+
+function preparedMirror(input: {
+  mirror: ManagedMirrorResult;
+  target: string;
+  backup: string;
+  hadPreviousTarget: boolean;
+  paths: ClaudePlusPlusPaths;
+  renamePath(source: string, target: string): Promise<void>;
+  removePath(path: string): Promise<void>;
+}): PreparedManagedMirror {
+  let status: "pending" | "committed" | "rolled-back" = "pending";
+  return {
+    mirror: input.mirror,
+    commit: async () => {
+      if (status !== "pending") return;
+      status = "committed";
+      if (input.hadPreviousTarget) {
+        await guardedRemove(input.backup, input.paths, input.removePath);
+      }
+    },
+    rollback: async () => {
+      if (status !== "pending") return;
+      if (input.hadPreviousTarget && !await pathExists(input.backup)) {
+        throw new Error(`Managed mirror backup is missing: ${input.backup}`);
+      }
+      if (await pathExists(input.target)) {
+        await guardedRemove(input.target, input.paths, input.removePath);
+      }
+      if (input.hadPreviousTarget) {
+        await input.renamePath(input.backup, input.target);
+      }
+      status = "rolled-back";
+    },
+  };
 }
 
 async function isCurrentMirror(target: string, install: ClaudeInstall): Promise<boolean> {
@@ -144,8 +216,16 @@ function resultFor(appRoot: string, reused: boolean): ManagedMirrorResult {
   };
 }
 
-async function guardedRemove(path: string, paths: ClaudePlusPlusPaths): Promise<void> {
+async function guardedRemove(
+  path: string,
+  paths: ClaudePlusPlusPaths,
+  removePath: (path: string) => Promise<void> = removeRecursively,
+): Promise<void> {
   assertManagedMirrorPath(path, paths);
+  await removePath(path);
+}
+
+async function removeRecursively(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
 

@@ -4,7 +4,11 @@ import { inspectClaudePlusPlusLoader } from "../asar.js";
 import { resolveClaudePlusPlusPaths, type ClaudePlusPlusPaths } from "../paths.js";
 import { discoverClaudeInstall, type ClaudeInstall } from "../platform.js";
 import { readClaudePlusPlusState } from "../state.js";
-import { inspectWatcher } from "../watcher-health.js";
+import {
+  inspectWatcher,
+  type InspectWatcherOptions,
+  type WatcherInspection,
+} from "../watcher-health.js";
 import { resolveInstallerSourceRoot } from "./install.js";
 import { getClaudePlusPlusStatus, type AsarProvenance } from "./status.js";
 
@@ -21,6 +25,7 @@ export interface DoctorResult {
 export interface DoctorDeps {
   discover(): Promise<ClaudeInstall>;
   sourceRoot: string;
+  inspectWatcher(options: InspectWatcherOptions): WatcherInspection;
 }
 
 export async function doctorClaudePlusPlus(
@@ -65,7 +70,7 @@ export async function doctorClaudePlusPlus(
   });
   checks.push(configCheck(paths.configFile));
   checks.push(storeCheck(join(dependencies.sourceRoot ?? resolveInstallerSourceRoot(), "store", "index.json")));
-  const watcher = inspectWatcher({ paths });
+  const watcher = (dependencies.inspectWatcher ?? inspectWatcher)({ paths });
   const watcherExpected = state?.watcher === "scheduled-task";
   checks.push({
     name: "watcher",

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import * as asar from "@electron/asar";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -23,7 +24,10 @@ import {
   type InstallCommandDeps,
 } from "../src/commands/install.ts";
 import { getDebugInfo } from "../src/commands/debug.ts";
-import { doctorClaudePlusPlus } from "../src/commands/doctor.ts";
+import {
+  doctorClaudePlusPlus,
+  type DoctorDeps,
+} from "../src/commands/doctor.ts";
 import { launchClaudePlusPlus } from "../src/commands/launch.ts";
 import { repairClaudePlusPlus } from "../src/commands/repair.ts";
 import { parseSafeModeArguments, runSafeMode } from "../src/commands/safe-mode.ts";
@@ -40,6 +44,10 @@ import {
   type ClaudePlusPlusStateV2,
 } from "../src/state.ts";
 import type { MirrorFileSystem } from "../src/windows-store-mirror.ts";
+import type {
+  InspectWatcherOptions,
+  WatcherInspection,
+} from "../src/watcher-health.ts";
 
 test("resolves the release source root from packages/installer/dist", () => {
   const releaseRoot = resolve("fixture-release");
@@ -278,6 +286,86 @@ test("failed forced install refresh before moving the target preserves mirror an
     assert.deepEqual(readFileSync(fixture.paths.stateFile), stateBefore);
     assert.equal(readFileSync(join(state.managedAppRoot, "sentinel.txt"), "utf8"), "old");
     assert.equal(readAsarHeaderHash(state.asarPath), state.patchedAsarHash);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("failed Loader injection after a forced refresh restores the complete previous mirror", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const state = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(state?.schemaVersion === 2);
+    const stateBefore = readFileSync(fixture.paths.stateFile);
+    const patchedAsarHashBefore = readAsarHeaderHash(state.asarPath);
+    const executableBefore = readFileSync(state.managedExecutable);
+    const executableHashBefore = sha256(executableBefore);
+    const sentinel = join(state.managedAppRoot, "managed-only.txt");
+    writeFileSync(sentinel, "keep previous mirror");
+    const sentinelBefore = readFileSync(sentinel);
+    const replacementOnly = join(state.managedAppRoot, "replacement-only.txt");
+    writeFileSync(join(fixture.install.appRoot, "replacement-only.txt"), "new official artifact");
+    writeFileSync(
+      fixture.install.executablePath,
+      Buffer.concat([Buffer.from("replacement-"), createElectronFixtureBinary()]),
+    );
+    rmSync(
+      join(fixture.options.sourceRoot, "packages", "loader", "loader.cjs"),
+      { force: true },
+    );
+
+    await assert.rejects(
+      installClaudePlusPlus({ ...fixture.options, force: true }, fixture.deps),
+      /loader\.cjs|ENOENT/i,
+    );
+
+    assert.deepEqual(readFileSync(fixture.paths.stateFile), stateBefore);
+    assert.equal(readAsarHeaderHash(state.asarPath), patchedAsarHashBefore);
+    assert.deepEqual(readFileSync(state.managedExecutable), executableBefore);
+    assert.equal(sha256(readFileSync(state.managedExecutable)), executableHashBefore);
+    assert.deepEqual(readFileSync(sentinel), sentinelBefore);
+    assert.equal(existsSync(replacementOnly), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("backup cleanup failure after state persistence keeps the replacement mirror", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const previousState = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(previousState?.schemaVersion === 2);
+    writeFileSync(join(previousState.managedAppRoot, "managed-only.txt"), "old mirror");
+    writeFileSync(join(fixture.install.appRoot, "replacement-only.txt"), "new official artifact");
+    await writeReplacementAsar(fixture.install.asarPath, fixture.root);
+    const replacementOriginalHash = readAsarHeaderHash(fixture.install.asarPath);
+    const mirrorFileSystem: MirrorFileSystem = {
+      remove: async (path) => {
+        if (path.includes(".backup-")) throw new Error("simulated backup cleanup failure");
+        rmSync(path, { recursive: true, force: true });
+      },
+    };
+
+    await assert.rejects(
+      installClaudePlusPlus(
+        { ...fixture.options, force: true },
+        { ...fixture.deps, mirrorFileSystem },
+      ),
+      /simulated backup cleanup failure/,
+    );
+
+    const persisted = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(persisted?.schemaVersion === 2);
+    assert.equal(persisted.originalAsarHash, replacementOriginalHash);
+    assert.notEqual(persisted.originalAsarHash, previousState.originalAsarHash);
+    assert.equal(readAsarHeaderHash(persisted.asarPath), persisted.patchedAsarHash);
+    assert.equal(existsSync(join(persisted.managedAppRoot, "managed-only.txt")), false);
+    assert.equal(
+      readFileSync(join(persisted.managedAppRoot, "replacement-only.txt"), "utf8"),
+      "new official artifact",
+    );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -677,7 +765,13 @@ test("status, debug, doctor, and launch expose the managed installation safely",
     await installClaudePlusPlus(fixture.options, fixture.deps);
     const status = getClaudePlusPlusStatus(fixture.paths);
     const debug = getDebugInfo(fixture.paths);
-    const doctor = await doctorClaudePlusPlus(fixture.paths, { discover: fixture.deps.discover });
+    let inspectedPaths: InspectWatcherOptions["paths"];
+    const doctor = await doctorClaudePlusPlus(
+      fixture.paths,
+      deterministicDoctorDeps(fixture, watcherNotInstalled, (options) => {
+        inspectedPaths = options.paths;
+      }),
+    );
     let launched = "";
     let detached = false;
 
@@ -690,6 +784,7 @@ test("status, debug, doctor, and launch expose the managed installation safely",
 
     assert.equal(status.asarProvenance, "patched");
     assert.equal(status.installed, true);
+    assert.equal(inspectedPaths, fixture.paths);
     assert.equal(debug.stateFile, fixture.paths.stateFile);
     assert.equal(doctor.checks.every((check) => check.ok), true);
     assert.deepEqual(doctor.checks.find((check) => check.name === "asar-hash"), {
@@ -766,7 +861,7 @@ test("status and Doctor distinguish original, drifted, unreadable, and legacy AS
     assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, "legacy");
     assert.equal(getClaudePlusPlusStatus(fixture.paths).installed, true);
     assert.deepEqual(
-      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+      (await doctorClaudePlusPlus(fixture.paths, deterministicDoctorDeps(fixture))).checks.find(
         (check) => check.name === "asar-hash",
       ),
       {
@@ -781,7 +876,7 @@ test("status and Doctor distinguish original, drifted, unreadable, and legacy AS
     assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, "original");
     assert.equal(getClaudePlusPlusStatus(fixture.paths).installed, false);
     assert.deepEqual(
-      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+      (await doctorClaudePlusPlus(fixture.paths, deterministicDoctorDeps(fixture))).checks.find(
         (check) => check.name === "asar-hash",
       ),
       { name: "asar-hash", ok: false, detail: "matches original; run repair" },
@@ -791,7 +886,7 @@ test("status and Doctor distinguish original, drifted, unreadable, and legacy AS
     assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, "drift");
     assert.equal(getClaudePlusPlusStatus(fixture.paths).installed, false);
     assert.deepEqual(
-      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+      (await doctorClaudePlusPlus(fixture.paths, deterministicDoctorDeps(fixture))).checks.find(
         (check) => check.name === "asar-hash",
       ),
       { name: "asar-hash", ok: false, detail: "drift from original and patched" },
@@ -801,7 +896,7 @@ test("status and Doctor distinguish original, drifted, unreadable, and legacy AS
     assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, "unreadable");
     assert.equal(getClaudePlusPlusStatus(fixture.paths).installed, false);
     assert.deepEqual(
-      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+      (await doctorClaudePlusPlus(fixture.paths, deterministicDoctorDeps(fixture))).checks.find(
         (check) => check.name === "asar-hash",
       ),
       { name: "asar-hash", ok: false, detail: "missing or unreadable" },
@@ -810,7 +905,7 @@ test("status and Doctor distinguish original, drifted, unreadable, and legacy AS
     rmSync(fixture.paths.stateFile, { force: true });
     assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, null);
     assert.deepEqual(
-      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+      (await doctorClaudePlusPlus(fixture.paths, deterministicDoctorDeps(fixture))).checks.find(
         (check) => check.name === "asar-hash",
       ),
       { name: "asar-hash", ok: false, detail: "unavailable" },
@@ -829,7 +924,15 @@ test("doctor rejects a configured Watcher whose artifacts are incomplete", async
     writeFileSync(fixture.paths.stateFile, JSON.stringify({ ...state, watcher: "scheduled-task" }));
     assert.equal(existsSync(join(fixture.paths.roamingRoot, "bin", "watcher.cmd")), false);
 
-    const doctor = await doctorClaudePlusPlus(fixture.paths, { discover: fixture.deps.discover });
+    const doctor = await doctorClaudePlusPlus(
+      fixture.paths,
+      deterministicDoctorDeps(fixture, {
+        installed: false,
+        watcher: "none",
+        tasks: ["claude-plusplus-watcher"],
+        scriptExists: false,
+      }),
+    );
     const watcherCheck = doctor.checks.find((check) => check.name === "watcher");
 
     assert.deepEqual(watcherCheck, {
@@ -851,7 +954,7 @@ test("status and doctor reject a managed app whose integrity fuse is enabled", a
     writeFixtureFuse(state.managedExecutable, 4, "1");
 
     const status = getClaudePlusPlusStatus(fixture.paths);
-    const doctor = await doctorClaudePlusPlus(fixture.paths, { discover: fixture.deps.discover });
+    const doctor = await doctorClaudePlusPlus(fixture.paths, deterministicDoctorDeps(fixture));
     const fuseCheck = doctor.checks.find((check) => check.name === "integrity-fuse");
     const asarCheck = doctor.checks.find((check) => check.name === "asar-hash");
 
@@ -1084,6 +1187,31 @@ function stateFixture(
     installedAt: "2026-08-20T00:00:00.000Z",
     watcher: "none",
   };
+}
+
+const watcherNotInstalled: WatcherInspection = {
+  installed: false,
+  watcher: "none",
+  tasks: [],
+  scriptExists: false,
+};
+
+function deterministicDoctorDeps(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  inspection: WatcherInspection = watcherNotInstalled,
+  observe: (options: InspectWatcherOptions) => void = () => {},
+): Partial<DoctorDeps> {
+  return {
+    discover: fixture.deps.discover,
+    inspectWatcher: (options) => {
+      observe(options);
+      return inspection;
+    },
+  };
+}
+
+function sha256(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 async function writeReplacementAsar(target: string, root: string): Promise<void> {
