@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@claude-plusplus/sdk": "*",
     "@electron/asar": "4.2.1"
   },
   "devDependencies": {
