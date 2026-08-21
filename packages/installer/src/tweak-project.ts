@@ -116,7 +116,11 @@ function resolveTweakEntry(
 ): TweakEntryResolution {
   const canonicalSourceDir = realpathSync(sourceDir);
   if (manifest.main) {
-    if (isAbsolute(manifest.main) || manifest.main.split(/[\\/]+/).includes("..")) {
+    if (
+      isAbsolute(manifest.main) ||
+      /^[A-Za-z]:/.test(manifest.main) ||
+      manifest.main.split(/[\\/]+/).includes("..")
+    ) {
       return { status: "invalid" };
     }
     const explicit = resolve(sourceDir, manifest.main);

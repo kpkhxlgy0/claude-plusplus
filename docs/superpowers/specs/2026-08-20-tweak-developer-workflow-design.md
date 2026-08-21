@@ -81,7 +81,7 @@ Validation performs these checks in order:
 1. Target and manifest exist.
 2. Manifest is valid JSON.
 3. `@claude-plusplus/sdk.validateTweakManifest` succeeds.
-4. Select explicit `manifest.main`, otherwise `index.js`, `index.cjs`, then `index.mjs`. An explicit entry must be project-relative and contain no `..` segment. Every accepted explicit or fallback entry must resolve canonically inside the canonical Tweak source directory, and its canonical target must be a regular file. Absolute entries, traversal entries, directories, and in-project Junction/symlink paths whose targets escape the project are validation errors.
+4. Select explicit `manifest.main`, otherwise `index.js`, `index.cjs`, then `index.mjs`. An explicit entry must be project-relative, must not be drive-qualified on Windows, and must contain no `..` segment. Every accepted explicit or fallback entry must resolve canonically inside the canonical Tweak source directory, and its canonical target must be a regular file. Absolute entries, drive-qualified Windows entries, traversal entries, directories, and in-project Junction/symlink paths whose targets escape the project are validation errors.
 
 All SDK errors and warnings are printed with their manifest paths. Missing entries are validation errors. Warnings do not fail the command. Any error causes a non-zero CLI exit through the existing top-level error path.
 
@@ -212,7 +212,7 @@ Packaging copies the complete `docs/tweaks` directory in addition to `docs/tweak
 - File writes occur only after manifest and target preflight succeeds.
 - Create never overwrites non-empty content.
 - Dev source targets are resolved and validated as Tweak directories; live link destinations are containment-checked before removal or creation.
-- Validation accepts an entry only when its canonical target is a regular file inside the canonical Tweak source directory. Explicit absolute/traversal entries and in-project Junction/symlink escapes fail before dev linking.
+- Validation accepts an entry only when its canonical target is a regular file inside the canonical Tweak source directory. Explicit absolute, drive-qualified Windows, and traversal entries and in-project Junction/symlink escapes fail before dev linking.
 - `--replace` applies only to a contained reparse point; it never removes a real directory.
 - Source validation errors never cause a live marker update.
 - Source validation is advisory rather than a Runtime reload barrier because the approved Runtime watcher continues following Junctions as Codex++ does.
@@ -229,7 +229,7 @@ Tests follow red-green-refactor and cover:
 - Default metadata derivation and explicit metadata overrides.
 - Refusal of existing files, non-empty directories, and empty directories without `--force`.
 - No partial scaffold when generated manifest validation fails.
-- Validation of a generated Tweak, a direct manifest path, fallback entries, warnings, invalid JSON, SDK-invalid fields, missing explicit/fallback entries, explicit absolute/traversal escapes, canonical Junction/symlink escapes, and explicit/fallback directory entries.
+- Validation of a generated Tweak, a direct manifest path, fallback entries, warnings, invalid JSON, SDK-invalid fields, missing explicit/fallback entries, explicit absolute/drive-qualified Windows/traversal escapes, canonical Junction/symlink escapes, and explicit/fallback directory entries.
 - Dev creation of a Windows Junction at the manifest id.
 - Idempotent same-source linking, wrong-source refusal, `--replace`, real-directory refusal, broken-link refusal, and link-name containment.
 - `--no-watch` exits after linking and marker creation.
@@ -245,6 +245,6 @@ Tests follow red-green-refactor and cover:
 - Reload markers live in the Tweaks root rather than inside the linked source.
 - Generated projects omit the currently unpublished npm SDK dependency and default to runnable CommonJS.
 - Development links are Windows Junctions only in this release.
-- Unlike Codex++, Claude++ accepts explicit and fallback entries only when the canonical target is a regular file inside the canonical Tweak source project. Absolute and `..` entries and in-project Junction/symlink escapes are rejected; out-of-tree build outputs must be copied or bundled into the project.
+- Unlike Codex++, Claude++ accepts explicit and fallback entries only when the canonical target is a regular file inside the canonical Tweak source project. Absolute, drive-qualified Windows, and `..` entries and in-project Junction/symlink escapes are rejected; out-of-tree build outputs must be copied or bundled into the project.
 - Claude++ keeps its stricter validator, Claude-specific permissions, in-process MCP leases, and no-configuration-write policy.
 - Codex-only Owl, React, native, browser, window, view, CDP, and external MCP surfaces are not copied.

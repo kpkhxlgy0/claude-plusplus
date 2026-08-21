@@ -210,6 +210,24 @@ test("project inspection rejects an absolute entry even when its file is inside 
   });
 });
 
+test("project inspection rejects a Windows drive-relative entry", () => {
+  withTempDir((root) => {
+    writeFileSync(join(root, "foo"), "module.exports = {};\n");
+    writeManifest(root, { ...validManifest, main: "C:foo" });
+
+    const inspection = inspectTweakProject(root);
+
+    assert.equal(inspection.entryPath, null);
+    assert.deepEqual(inspection.errors, [
+      {
+        path: "main",
+        message:
+          "entry file must resolve to a regular file inside the Tweak source project: C:foo",
+      },
+    ]);
+  });
+});
+
 test("project inspection rejects a dot-dot entry even when it resolves inside the project", () => {
   withTempDir((root) => {
     mkdirSync(join(root, "nested"));

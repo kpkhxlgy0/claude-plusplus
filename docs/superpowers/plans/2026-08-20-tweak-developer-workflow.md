@@ -15,7 +15,7 @@
 - Inspect and preserve the installed Codex++ `create-tweak`, `validate-tweak`, and `dev` command shapes, while retaining every approved Claude++ difference in the spec.
 - Use `@claude-plusplus/sdk.validateTweakManifest` as the only manifest validator; do not copy validation rules into the Installer.
 - Create/validate/dev never execute Tweak source.
-- Every accepted explicit or fallback entry must resolve canonically inside the canonical Tweak source directory and its canonical target must be a regular file. Reject explicit absolute/`..` paths and in-project Junction/symlink paths whose canonical targets escape; out-of-tree build outputs must be copied or bundled into the project.
+- Every accepted explicit or fallback entry must resolve canonically inside the canonical Tweak source directory and its canonical target must be a regular file. Reject explicit absolute, drive-qualified Windows, and `..` paths and in-project Junction/symlink paths whose canonical targets escape; out-of-tree build outputs must be copied or bundled into the project.
 - Generated projects are runnable CommonJS and contain no unpublished npm dependency.
 - Development source directories may live anywhere the user selects; only the live Junction destination is confined to an immediate child of `paths.tweaks`.
 - `--replace` removes only a validated contained Junction. It never removes a real file/directory or a broken/malformed reparse point.
@@ -131,7 +131,7 @@ const validManifest = {
 
 Also assert missing targets throw `target does not exist`, missing manifests throw `manifest not found`, and malformed JSON throws `manifest is not valid JSON`.
 
-Add real-filesystem regression cases for an inconsistent empty-error inspection, explicit `../` and absolute entries, an in-project Junction/symlink whose canonical target escapes the project, explicit and fallback directory entries, and fallback continuation to the next regular-file candidate. Retain the valid nested-entry and same-inspection/no-reinspection cases. Tests must use only temporary roots and must not touch live Claude++/Claude/Codex data.
+Add real-filesystem regression cases for an inconsistent empty-error inspection, explicit `../`, absolute, and drive-qualified Windows entries, an in-project Junction/symlink whose canonical target escapes the project, explicit and fallback directory entries, and fallback continuation to the next regular-file candidate. Retain the valid nested-entry and same-inspection/no-reinspection cases. Tests must use only temporary roots and must not touch live Claude++/Claude/Codex data.
 
 - [ ] **Step 3: Run the focused test and verify RED**
 
@@ -189,7 +189,7 @@ export interface ValidTweakProject extends TweakProjectInspection {
 }
 ```
 
-`inspectTweakProject` resolves the target, rejects nonexistence, maps a directory to `manifest.json`, parses JSON once, runs the SDK validator once, and only resolves an entry after SDK success. An explicit `main` must be project-relative and contain no `..` path segment. Canonicalize the source directory and each existing explicit/fallback candidate, accept only canonical targets contained inside the canonical source directory whose `statSync(...).isFile()` is true, and convert a practical disappearance during `realpathSync`/`statSync` into the normal missing-entry validation issue. An in-project Junction/symlink that resolves outside is invalid. If explicit `main` is missing, append `{ path: "main", message: "entry file does not exist: <main>" }`; otherwise use `no entry file found; expected one of index.js, index.cjs, index.mjs`. Preserve `index.js`, `index.cjs`, `index.mjs` fallback precedence among acceptable regular files.
+`inspectTweakProject` resolves the target, rejects nonexistence, maps a directory to `manifest.json`, parses JSON once, runs the SDK validator once, and only resolves an entry after SDK success. An explicit `main` must be project-relative, must not be drive-qualified on Windows, and must contain no `..` path segment. Canonicalize the source directory and each existing explicit/fallback candidate, accept only canonical targets contained inside the canonical source directory whose `statSync(...).isFile()` is true, and convert a practical disappearance during `realpathSync`/`statSync` into the normal missing-entry validation issue. An in-project Junction/symlink that resolves outside is invalid. If explicit `main` is missing, append `{ path: "main", message: "entry file does not exist: <main>" }`; otherwise use `no entry file found; expected one of index.js, index.cjs, index.mjs`. Preserve `index.js`, `index.cjs`, `index.mjs` fallback precedence among acceptable regular files.
 
 Export `requireValidInspection(inspection)` as the single narrowing helper. It throws one error containing every `<path>: <message>` line when `errors.length > 0`. With no reported errors it must still verify that both `manifest` and `entryPath` are non-null, reject an inconsistent structural inspection, and construct a sound `ValidTweakProject` with `errors: []` rather than cast. `requireValidTweakProject(target)` calls `inspectTweakProject` once and passes that result to the narrowing helper. Neither function suppresses warnings.
 
