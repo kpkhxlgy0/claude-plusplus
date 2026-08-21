@@ -21,20 +21,23 @@ const base = {
   watcher: "scheduled-task" as const,
 };
 
+const schema1Fixture = { schemaVersion: 1 as const, ...base };
+const schema2Fixture = {
+  schemaVersion: 2 as const,
+  ...base,
+  originalAsarHash: "1".repeat(64),
+  patchedAsarHash: "a".repeat(64),
+};
+
 test("state reader accepts schema 1 and strict schema 2 hashes", () => {
-  withStateFile({ schemaVersion: 1, ...base }, (file) => {
+  withStateFile(schema1Fixture, (file) => {
     const state = readClaudePlusPlusState(file);
-    assert.equal(state?.schemaVersion, 1);
+    assert.deepEqual(state, schema1Fixture);
     assert.equal(isClaudePlusPlusStateV2(state), false);
   });
-  withStateFile({
-    schemaVersion: 2,
-    ...base,
-    originalAsarHash: "1".repeat(64),
-    patchedAsarHash: "a".repeat(64),
-  }, (file) => {
+  withStateFile(schema2Fixture, (file) => {
     const state = readClaudePlusPlusState(file);
-    assert.equal(state?.schemaVersion, 2);
+    assert.deepEqual(state, schema2Fixture);
     assert.equal(isClaudePlusPlusStateV2(state), true);
   });
 });
@@ -71,22 +74,32 @@ for (const field of ["originalAsarHash", "patchedAsarHash"] as const) {
   }
 }
 
-for (const field of [
-  "claudePlusPlusVersion",
-  "packageFullName",
-  "packageVersion",
-  "officialAppRoot",
-  "managedAppRoot",
-  "managedExecutable",
-  "asarPath",
-  "originalMain",
-  "installedAt",
+for (const fixture of [
+  { name: "schema 1", value: schema1Fixture },
+  { name: "schema 2", value: schema2Fixture },
 ] as const) {
-  test(`state reader requires common field ${field}`, () => {
-    const value: Record<string, unknown> = { schemaVersion: 1, ...base };
-    delete value[field];
-    withStateFile(value, (file) => assert.equal(readClaudePlusPlusState(file), null));
-  });
+  for (const field of [
+    "claudePlusPlusVersion",
+    "packageFullName",
+    "packageVersion",
+    "officialAppRoot",
+    "managedAppRoot",
+    "managedExecutable",
+    "asarPath",
+    "originalMain",
+    "installedAt",
+  ] as const) {
+    test(`state reader rejects ${fixture.name} missing common field ${field}`, () => {
+      const value: Record<string, unknown> = { ...fixture.value };
+      delete value[field];
+      withStateFile(value, (file) => assert.equal(readClaudePlusPlusState(file), null));
+    });
+
+    test(`state reader rejects ${fixture.name} non-string common field ${field}`, () => {
+      const value: Record<string, unknown> = { ...fixture.value, [field]: 7 };
+      withStateFile(value, (file) => assert.equal(readClaudePlusPlusState(file), null));
+    });
+  }
 }
 
 test("state reader rejects unsupported schemas and normalizes Watcher", () => {
