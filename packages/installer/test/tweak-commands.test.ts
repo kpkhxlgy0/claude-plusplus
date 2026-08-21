@@ -24,13 +24,20 @@ import {
   type CreatedTweakProject,
   type CreateTweakOptions,
 } from "../src/commands/create-tweak.ts";
+import { devTweak } from "../src/commands/dev-tweak.ts";
 import { resolveClaudePlusPlusPaths, type ClaudePlusPlusPaths } from "../src/paths.ts";
 import {
+  type DevTweakResult,
   ensureDevTweakLink,
   prepareDevTweak,
   unlinkDevTweakLink,
   writeDevReloadMarker,
 } from "../src/tweak-dev-link.ts";
+import {
+  type DevSourceWatcher,
+  type TweakDevWatchDependencies,
+  watchTweakProject,
+} from "../src/tweak-dev-watch.ts";
 import { requireValidTweakProject } from "../src/tweak-project.ts";
 import type { TweakCommandOutput } from "../src/tweak-output.ts";
 import { tweakChannel } from "../../runtime/src/tweak-ipc.ts";
@@ -867,6 +874,217 @@ test("dev preparation reports every project warning and familiar link details", 
   });
 });
 
+test("dev source changes cancel the real timer handle, ignore generated paths, and validate before marking", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const fixture = fakeDevSourceWatcher();
+    const watching = watchTweakProject(source, paths, fixture.dependencies);
+
+    fixture.sourceListener?.("change", "src\\index.js");
+    fixture.sourceListener?.("change", "manifest.json");
+    fixture.sourceListener?.("change", "node_modules\\pkg\\index.js");
+    fixture.sourceListener?.("change", "packages/node_modules/pkg/index.js");
+    fixture.sourceListener?.("change", ".claudepp-dev-reload");
+    fixture.sourceListener?.("change", "nested\\.claudepp-dev-reload");
+    fixture.sourceListener?.("change", ".claudepp-safe-mode-reload");
+    fixture.sourceListener?.("change", "nested/.claudepp-safe-mode-reload");
+
+    assert.deepEqual(fixture.watchArguments, [{
+      sourceDir: source,
+      options: { recursive: true },
+    }]);
+    assert.deepEqual(fixture.delays, [100, 100]);
+    assert.equal(fixture.scheduled[0]?.cancelled, true);
+    assert.equal(fixture.scheduled[1]?.cancelled, false);
+    assert.equal(fixture.markerWrites, 0);
+    for (const timer of fixture.scheduled) {
+      if (!timer.cancelled) await timer.callback();
+    }
+    assert.equal(fixture.markerWrites, 1);
+    assert.deepEqual(fixture.output.log, ["valid 03:04:05 (manifest.json)"]);
+
+    const manifestPath = join(source, "manifest.json");
+    const validManifest = readFileSync(manifestPath, "utf8");
+    const manifest = JSON.parse(validManifest) as Record<string, unknown>;
+    manifest.id = "not a valid id";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    fixture.sourceListener?.("change", "manifest.json");
+    await fixture.scheduled.at(-1)?.callback();
+
+    assert.equal(fixture.markerWrites, 1);
+    assert.equal(fixture.output.error.length, 1);
+    assert.match(fixture.output.error[0]!, /^invalid /);
+    assert.match(fixture.output.error[0]!, /id/);
+
+    writeFileSync(manifestPath, validManifest, "utf8");
+    fixture.sourceListener?.("rename", null);
+    await fixture.scheduled.at(-1)?.callback();
+
+    assert.equal(fixture.markerWrites, 2);
+    assert.equal(fixture.output.log.at(-1), "valid 03:04:05");
+
+    fixture.sourceListener?.("change", Buffer.from("src\\index.js"));
+    await fixture.scheduled.at(-1)?.callback();
+
+    assert.equal(fixture.markerWrites, 3);
+    assert.equal(fixture.output.log.at(-1), "valid 03:04:05 (src\\index.js)");
+
+    fixture.signalListeners.get("SIGINT")?.();
+    await watching;
+  });
+});
+
+test("dev source marker failures settle through the invalid output branch", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const fixture = fakeDevSourceWatcher();
+    fixture.dependencies.writeMarker = () => {
+      throw new Error("marker write failed");
+    };
+    const watching = watchTweakProject(source, paths, fixture.dependencies);
+
+    fixture.sourceListener?.("change", "index.js");
+    await assert.doesNotReject(async () => fixture.scheduled[0]?.callback());
+
+    assert.deepEqual(fixture.output.error, ["invalid marker write failed"]);
+    fixture.signalListeners.get("SIGINT")?.();
+    await watching;
+  });
+});
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  test(`dev source watcher ${signal} cleanup cancels pending work and is idempotent`, async () => {
+    await withDevFixture(async ({ source, paths }) => {
+      const fixture = fakeDevSourceWatcher();
+      const watching = watchTweakProject(source, paths, fixture.dependencies);
+      fixture.sourceListener?.("change", "index.js");
+      const pending = fixture.scheduled[0]!;
+      const stop = fixture.signalListeners.get(signal);
+      const otherSignal = signal === "SIGINT" ? "SIGTERM" : "SIGINT";
+      const lateStop = fixture.signalListeners.get(otherSignal);
+      const lateError = fixture.errorListener;
+
+      assert.ok(stop);
+      assert.ok(lateStop);
+      stop();
+      lateStop();
+      lateError?.(new Error("late watcher error"));
+      await watching;
+
+      assert.equal(pending.cancelled, true);
+      assert.equal(fixture.watcherCloses, 1);
+      assert.deepEqual(fixture.offSignals, ["SIGINT", "SIGTERM"]);
+      assert.deepEqual(fixture.signalListenerMatches, [true, true]);
+      assert.equal(fixture.signalListeners.size, 0);
+      assert.equal(fixture.markerWrites, 0);
+    });
+  });
+}
+
+test("dev source watcher errors reject after canceling and unregistering owned listeners", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const fixture = fakeDevSourceWatcher();
+    const watching = watchTweakProject(source, paths, fixture.dependencies);
+    fixture.sourceListener?.("change", "index.js");
+    const pending = fixture.scheduled[0]!;
+
+    fixture.errorListener?.(new Error("watch failed"));
+
+    await assert.rejects(watching, /Tweak source watcher failed: watch failed/);
+    assert.equal(pending.cancelled, true);
+    assert.equal(fixture.watcherCloses, 1);
+    assert.deepEqual(fixture.offSignals, ["SIGINT", "SIGTERM"]);
+    assert.deepEqual(fixture.signalListenerMatches, [true, true]);
+    assert.equal(fixture.signalListeners.size, 0);
+    assert.equal(fixture.markerWrites, 0);
+  });
+});
+
+test("dev source watcher rejects unsupported platforms before installing side effects", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const fixture = fakeDevSourceWatcher();
+    fixture.dependencies.platform = () => "linux";
+
+    await assert.rejects(
+      watchTweakProject(source, paths, fixture.dependencies),
+      /Tweak development links require Windows/,
+    );
+
+    assert.deepEqual(fixture.watchArguments, []);
+    assert.equal(fixture.signalInstallations, 0);
+    assert.equal(fixture.markerWrites, 0);
+  });
+});
+
+test("dev command prepares before watching, waits, and preserves the prepared result", async () => {
+  const calls: string[] = [];
+  const paths = resolveClaudePlusPlusPaths({
+    APPDATA: "D:\\profile\\appdata",
+    LOCALAPPDATA: "D:\\profile\\localappdata",
+    USERPROFILE: "D:\\profile",
+  });
+  const prepared = fakeDevTweakResult("D:\\source");
+  const output = captureTweakOutput();
+  let finishWatching: (() => void) | undefined;
+  const watched = new Promise<void>((resolvePromise) => {
+    finishWatching = resolvePromise;
+  });
+
+  const resultPromise = devTweak("D:\\target", {}, {
+    paths,
+    output: output.output,
+    prepare(target, options, dependencies) {
+      calls.push("prepare");
+      assert.equal(target, "D:\\target");
+      assert.deepEqual(options, {});
+      assert.equal(dependencies.paths, paths);
+      assert.equal(dependencies.output, output.output);
+      return prepared;
+    },
+    watchForChanges(sourceDir, watchedPaths) {
+      calls.push("watch");
+      assert.equal(sourceDir, prepared.sourceDir);
+      assert.equal(watchedPaths, paths);
+      return watched;
+    },
+  });
+
+  assert.deepEqual(calls, ["prepare", "watch"]);
+  assert.deepEqual(output.log, ["watching for changes; press Ctrl+C to stop"]);
+  let settled = false;
+  void resultPromise.finally(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false);
+
+  finishWatching?.();
+  assert.equal(await resultPromise, prepared);
+});
+
+test("dev command no-watch mode returns the exact prepared result without starting a watcher", async () => {
+  const calls: string[] = [];
+  const paths = resolveClaudePlusPlusPaths({
+    APPDATA: "D:\\profile\\appdata",
+    LOCALAPPDATA: "D:\\profile\\localappdata",
+    USERPROFILE: "D:\\profile",
+  });
+  const prepared = fakeDevTweakResult("D:\\source");
+  const output = captureTweakOutput();
+
+  const result = await devTweak("D:\\target", { watch: false }, {
+    paths,
+    output: output.output,
+    prepare() {
+      calls.push("prepare");
+      return prepared;
+    },
+    async watchForChanges() {
+      calls.push("watch");
+    },
+  });
+
+  assert.equal(result, prepared);
+  assert.deepEqual(calls, ["prepare"]);
+  assert.deepEqual(output.log, []);
+});
+
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
 }
@@ -967,6 +1185,122 @@ function captureTweakOutput(): {
     log,
     warn,
     error,
+  };
+}
+
+interface FakeDevTimer {
+  callback(): void;
+  delay: number;
+  cancelled: boolean;
+}
+
+function fakeDevSourceWatcher(): {
+  dependencies: Partial<TweakDevWatchDependencies>;
+  scheduled: FakeDevTimer[];
+  delays: number[];
+  signalListeners: Map<"SIGINT" | "SIGTERM", () => void>;
+  offSignals: Array<"SIGINT" | "SIGTERM">;
+  signalListenerMatches: boolean[];
+  readonly sourceListener:
+    | ((event: string, filename: string | Buffer | null) => void)
+    | undefined;
+  readonly errorListener: ((error: unknown) => void) | undefined;
+  readonly watcherCloses: number;
+  readonly markerWrites: number;
+  readonly signalInstallations: number;
+  watchArguments: Array<{ sourceDir: string; options: { recursive: true } }>;
+  output: ReturnType<typeof captureTweakOutput>;
+} {
+  const scheduled: FakeDevTimer[] = [];
+  const delays: number[] = [];
+  const signalListeners = new Map<"SIGINT" | "SIGTERM", () => void>();
+  const offSignals: Array<"SIGINT" | "SIGTERM"> = [];
+  const signalListenerMatches: boolean[] = [];
+  const watchArguments: Array<{ sourceDir: string; options: { recursive: true } }> = [];
+  const output = captureTweakOutput();
+  let sourceListener:
+    | ((event: string, filename: string | Buffer | null) => void)
+    | undefined;
+  let errorListener: ((error: unknown) => void) | undefined;
+  let watcherCloses = 0;
+  let markerWrites = 0;
+  let signalInstallations = 0;
+  const watcher: DevSourceWatcher = {
+    on(event, listener) {
+      assert.equal(event, "error");
+      errorListener = listener;
+      return this;
+    },
+    close() {
+      watcherCloses += 1;
+    },
+  };
+  const dependencies: Partial<TweakDevWatchDependencies> = {
+    watchFactory(sourceDir, options, listener) {
+      watchArguments.push({ sourceDir, options });
+      sourceListener = listener;
+      return watcher;
+    },
+    setTimer(callback, delay) {
+      const timer: FakeDevTimer = { callback, delay, cancelled: false };
+      scheduled.push(timer);
+      delays.push(delay);
+      return timer;
+    },
+    clearTimer(handle) {
+      assert.ok(scheduled.includes(handle as FakeDevTimer));
+      (handle as FakeDevTimer).cancelled = true;
+    },
+    onSignal(signal, listener) {
+      signalInstallations += 1;
+      signalListeners.set(signal, listener);
+    },
+    offSignal(signal, listener) {
+      offSignals.push(signal);
+      signalListenerMatches.push(signalListeners.get(signal) === listener);
+      if (signalListeners.get(signal) === listener) signalListeners.delete(signal);
+    },
+    now: () => new Date(2026, 0, 2, 3, 4, 5),
+    platform: () => "win32",
+    writeMarker() {
+      markerWrites += 1;
+      return "D:\\profile\\appdata\\claude-plusplus\\tweaks\\.claudepp-dev-reload";
+    },
+    output: output.output,
+  };
+  return {
+    dependencies,
+    scheduled,
+    delays,
+    signalListeners,
+    offSignals,
+    signalListenerMatches,
+    watchArguments,
+    output,
+    get sourceListener() { return sourceListener; },
+    get errorListener() { return errorListener; },
+    get watcherCloses() { return watcherCloses; },
+    get markerWrites() { return markerWrites; },
+    get signalInstallations() { return signalInstallations; },
+  };
+}
+
+function fakeDevTweakResult(sourceDir: string): DevTweakResult {
+  return {
+    sourceDir,
+    linkPath: "D:\\profile\\appdata\\claude-plusplus\\tweaks\\com.example.dev",
+    markerPath: "D:\\profile\\appdata\\claude-plusplus\\tweaks\\.claudepp-dev-reload",
+    manifest: {
+      id: "com.example.dev",
+      name: "Dev",
+      version: "0.1.0",
+      githubRepo: "example/dev",
+      description: "Development Tweak",
+      scope: "both",
+      main: "index.js",
+      permissions: ["settings", "ipc"],
+    },
+    linkStatus: "current",
   };
 }
 
