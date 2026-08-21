@@ -36,9 +36,9 @@ module.exports = {
 ```
 
 Main stops started Tweaks in reverse start order. For each Tweak, Runtime awaits `stop()` and then disposes its API
-lease even if stop reports an error. Lease disposal revokes registered IPC handlers/listeners, storage flushing,
-startup-environment and Claude Code settings references, MCP registrations, and session-title references as
-applicable. Retained gated API references reject after disposal.
+lease even if stop reports an error. Lease disposal removes registered IPC handlers/listeners, flushes pending Main
+storage, and revokes gated capability references or registrations for startup environment, Claude Code settings, MCP,
+and session titles as applicable. Retained gated API references reject after disposal.
 
 Renderer reconstruction also stops the old lifecycle before clearing Settings registrations and loading fresh
 catalog/source state.
