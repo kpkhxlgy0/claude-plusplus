@@ -27,12 +27,16 @@ import { doctorClaudePlusPlus } from "../src/commands/doctor.ts";
 import { launchClaudePlusPlus } from "../src/commands/launch.ts";
 import { repairClaudePlusPlus } from "../src/commands/repair.ts";
 import { parseSafeModeArguments, runSafeMode } from "../src/commands/safe-mode.ts";
-import { getClaudePlusPlusStatus } from "../src/commands/status.ts";
+import {
+  classifyAsarProvenance,
+  getClaudePlusPlusStatus,
+} from "../src/commands/status.ts";
 import { uninstallClaudePlusPlus } from "../src/commands/uninstall.ts";
 import type { ClaudeInstall } from "../src/platform.ts";
 import { resolveClaudePlusPlusPaths } from "../src/paths.ts";
 import {
   readClaudePlusPlusState,
+  type ClaudePlusPlusState,
   type ClaudePlusPlusStateV2,
 } from "../src/state.ts";
 import type { MirrorFileSystem } from "../src/windows-store-mirror.ts";
@@ -652,6 +656,21 @@ test("Safe Mode mutation refuses a present unreadable config path before any wri
   }
 });
 
+test("ASAR provenance classifies schema 2 hashes and legacy state", () => {
+  const v2 = stateFixture({
+    schemaVersion: 2,
+    originalAsarHash: "1".repeat(64),
+    patchedAsarHash: "2".repeat(64),
+  });
+
+  assert.equal(classifyAsarProvenance(v2, "2".repeat(64)), "patched");
+  assert.equal(classifyAsarProvenance(v2, "1".repeat(64)), "original");
+  assert.equal(classifyAsarProvenance(v2, "3".repeat(64)), "drift");
+  assert.equal(classifyAsarProvenance(v2, null), "unreadable");
+  assert.equal(classifyAsarProvenance(stateFixture({ schemaVersion: 1 }), null), "legacy");
+  assert.equal(classifyAsarProvenance(null, null), null);
+});
+
 test("status, debug, doctor, and launch expose the managed installation safely", async () => {
   const fixture = await createFixture();
   try {
@@ -669,14 +688,21 @@ test("status, debug, doctor, and launch expose the managed installation safely",
       },
     }));
 
+    assert.equal(status.asarProvenance, "patched");
     assert.equal(status.installed, true);
     assert.equal(debug.stateFile, fixture.paths.stateFile);
     assert.equal(doctor.checks.every((check) => check.ok), true);
+    assert.deepEqual(doctor.checks.find((check) => check.name === "asar-hash"), {
+      name: "asar-hash",
+      ok: true,
+      detail: "matches patched",
+    });
     assert.deepEqual(doctor.checks.map((check) => check.name), [
       "official-claude",
       "state",
       "managed-app",
       "loader",
+      "asar-hash",
       "runtime",
       "settings-runtime",
       "integrity-fuse",
@@ -696,6 +722,72 @@ test("status, debug, doctor, and launch expose the managed installation safely",
     assert.equal(JSON.stringify(doctor).includes(fixture.root), false);
     assert.equal(launched, status.managedExecutable);
     assert.equal(detached, true);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("status and Doctor distinguish original, drifted, unreadable, and legacy ASARs", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const state = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(state?.schemaVersion === 2);
+
+    const { originalAsarHash: _original, patchedAsarHash: _patched, ...common } = state;
+    writeFileSync(fixture.paths.stateFile, JSON.stringify({ ...common, schemaVersion: 1 }));
+    assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, "legacy");
+    assert.equal(getClaudePlusPlusStatus(fixture.paths).installed, true);
+    assert.deepEqual(
+      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+        (check) => check.name === "asar-hash",
+      ),
+      {
+        name: "asar-hash",
+        ok: true,
+        detail: "not recorded; run repair to establish provenance",
+      },
+    );
+    writeFileSync(fixture.paths.stateFile, JSON.stringify(state));
+
+    copyFileSync(fixture.install.asarPath, state.asarPath);
+    assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, "original");
+    assert.equal(getClaudePlusPlusStatus(fixture.paths).installed, false);
+    assert.deepEqual(
+      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+        (check) => check.name === "asar-hash",
+      ),
+      { name: "asar-hash", ok: false, detail: "matches original; run repair" },
+    );
+
+    await writeReplacementAsar(state.asarPath, fixture.root);
+    assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, "drift");
+    assert.equal(getClaudePlusPlusStatus(fixture.paths).installed, false);
+    assert.deepEqual(
+      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+        (check) => check.name === "asar-hash",
+      ),
+      { name: "asar-hash", ok: false, detail: "drift from original and patched" },
+    );
+
+    writeFileSync(state.asarPath, "not an asar");
+    assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, "unreadable");
+    assert.equal(getClaudePlusPlusStatus(fixture.paths).installed, false);
+    assert.deepEqual(
+      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+        (check) => check.name === "asar-hash",
+      ),
+      { name: "asar-hash", ok: false, detail: "missing or unreadable" },
+    );
+
+    rmSync(fixture.paths.stateFile, { force: true });
+    assert.equal(getClaudePlusPlusStatus(fixture.paths).asarProvenance, null);
+    assert.deepEqual(
+      (await doctorClaudePlusPlus(fixture.paths, fixture.deps)).checks.find(
+        (check) => check.name === "asar-hash",
+      ),
+      { name: "asar-hash", ok: false, detail: "unavailable" },
+    );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -734,10 +826,13 @@ test("status and doctor reject a managed app whose integrity fuse is enabled", a
     const status = getClaudePlusPlusStatus(fixture.paths);
     const doctor = await doctorClaudePlusPlus(fixture.paths, { discover: fixture.deps.discover });
     const fuseCheck = doctor.checks.find((check) => check.name === "integrity-fuse");
+    const asarCheck = doctor.checks.find((check) => check.name === "asar-hash");
 
     assert.equal(status.installed, false);
+    assert.equal(status.asarProvenance, "patched");
     assert.equal(status.integrityFuseReady, false);
     assert.equal(fuseCheck?.ok, false);
+    assert.deepEqual(asarCheck, { name: "asar-hash", ok: true, detail: "matches patched" });
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -941,6 +1036,28 @@ test("uninstall attempts Watcher cleanup even when installer state is missing", 
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+function stateFixture(
+  state: { schemaVersion: 1 } | {
+    schemaVersion: 2;
+    originalAsarHash: string;
+    patchedAsarHash: string;
+  },
+): ClaudePlusPlusState {
+  return {
+    ...state,
+    claudePlusPlusVersion: "0.2.9",
+    packageFullName: "Claude_fixture_x64__test",
+    packageVersion: "1.0.0.0",
+    officialAppRoot: "C:\\official\\app",
+    managedAppRoot: "C:\\local\\claude-plusplus\\store-apps\\Claude_fixture\\app",
+    managedExecutable: "C:\\local\\claude-plusplus\\store-apps\\Claude_fixture\\app\\claude.exe",
+    asarPath: "C:\\local\\claude-plusplus\\store-apps\\Claude_fixture\\app\\resources\\app.asar",
+    originalMain: ".vite/build/index.pre.js",
+    installedAt: "2026-08-20T00:00:00.000Z",
+    watcher: "none",
+  };
+}
 
 async function writeReplacementAsar(target: string, root: string): Promise<void> {
   const source = join(root, "replacement-asar-source");

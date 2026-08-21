@@ -6,7 +6,7 @@ import { discoverClaudeInstall, type ClaudeInstall } from "../platform.js";
 import { readClaudePlusPlusState } from "../state.js";
 import { inspectWatcher } from "../watcher-health.js";
 import { resolveInstallerSourceRoot } from "./install.js";
-import { getClaudePlusPlusStatus } from "./status.js";
+import { getClaudePlusPlusStatus, type AsarProvenance } from "./status.js";
 
 export interface DoctorCheck {
   name: string;
@@ -49,6 +49,7 @@ export async function doctorClaudePlusPlus(
     detail: loader ? `version ${loader.metadata.loaderVersion}` : "missing or invalid",
   });
   const status = getClaudePlusPlusStatus(paths);
+  checks.push(asarHashCheck(status.asarProvenance));
   checks.push({ name: "runtime", ok: status.runtimeReady, detail: status.runtimeReady ? "ready" : "missing" });
   const settingsRuntimeReady = existsSync(join(paths.runtime, "main.js")) &&
     existsSync(join(paths.runtime, "preload", "index.js"));
@@ -75,6 +76,27 @@ export async function doctorClaudePlusPlus(
   });
   checks.push({ name: "safe-mode", ok: true, detail: status.safeMode ? "enabled" : "disabled" });
   return { checks };
+}
+
+function asarHashCheck(provenance: AsarProvenance | null): DoctorCheck {
+  switch (provenance) {
+    case "patched":
+      return { name: "asar-hash", ok: true, detail: "matches patched" };
+    case "legacy":
+      return {
+        name: "asar-hash",
+        ok: true,
+        detail: "not recorded; run repair to establish provenance",
+      };
+    case "original":
+      return { name: "asar-hash", ok: false, detail: "matches original; run repair" };
+    case "drift":
+      return { name: "asar-hash", ok: false, detail: "drift from original and patched" };
+    case "unreadable":
+      return { name: "asar-hash", ok: false, detail: "missing or unreadable" };
+    default:
+      return { name: "asar-hash", ok: false, detail: "unavailable" };
+  }
 }
 
 function configCheck(path: string): DoctorCheck {

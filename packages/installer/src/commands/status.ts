@@ -1,8 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
-import { inspectClaudePlusPlusLoader } from "../asar.js";
+import { inspectClaudePlusPlusLoader, readAsarHeaderHash } from "../asar.js";
 import { isEmbeddedAsarIntegrityValidationDisabled } from "../fuses.js";
 import { resolveClaudePlusPlusPaths, type ClaudePlusPlusPaths } from "../paths.js";
-import { readClaudePlusPlusState } from "../state.js";
+import {
+  isClaudePlusPlusStateV2,
+  readClaudePlusPlusState,
+  type ClaudePlusPlusState,
+} from "../state.js";
+
+export type AsarProvenance = "patched" | "original" | "drift" | "unreadable" | "legacy";
 
 export interface ClaudePlusPlusStatus {
   installed: boolean;
@@ -12,7 +18,20 @@ export interface ClaudePlusPlusStatus {
   runtimeReady: boolean;
   loaderReady: boolean;
   integrityFuseReady: boolean;
+  asarProvenance: AsarProvenance | null;
   safeMode: boolean;
+}
+
+export function classifyAsarProvenance(
+  state: ClaudePlusPlusState | null,
+  currentHash: string | null,
+): AsarProvenance | null {
+  if (!state) return null;
+  if (!isClaudePlusPlusStateV2(state)) return "legacy";
+  if (currentHash === null) return "unreadable";
+  if (currentHash === state.patchedAsarHash) return "patched";
+  if (currentHash === state.originalAsarHash) return "original";
+  return "drift";
 }
 
 export function getClaudePlusPlusStatus(
@@ -23,9 +42,13 @@ export function getClaudePlusPlusStatus(
     existsSync(`${paths.runtime}\\preload\\index.js`);
   const loaderReady = state ? inspectClaudePlusPlusLoader(state.asarPath) !== null : false;
   const integrityFuseReady = state ? readIntegrityFuse(state.managedExecutable) : false;
+  const currentAsarHash = state?.schemaVersion === 2 ? readAsarHash(state.asarPath) : null;
+  const asarProvenance = classifyAsarProvenance(state, currentAsarHash);
+  const provenanceReady = state?.schemaVersion === 1 || asarProvenance === "patched";
   return {
     installed: Boolean(
-      state && existsSync(state.managedExecutable) && runtimeReady && loaderReady && integrityFuseReady,
+      state && provenanceReady && existsSync(state.managedExecutable) &&
+      runtimeReady && loaderReady && integrityFuseReady,
     ),
     version: state?.claudePlusPlusVersion ?? null,
     packageVersion: state?.packageVersion ?? null,
@@ -33,8 +56,17 @@ export function getClaudePlusPlusStatus(
     runtimeReady,
     loaderReady,
     integrityFuseReady,
+    asarProvenance,
     safeMode: readSafeMode(paths.configFile),
   };
+}
+
+function readAsarHash(path: string): string | null {
+  try {
+    return readAsarHeaderHash(path);
+  } catch {
+    return null;
+  }
 }
 
 function readIntegrityFuse(path: string): boolean {
