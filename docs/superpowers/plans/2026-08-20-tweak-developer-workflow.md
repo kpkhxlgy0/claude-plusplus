@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Inspect and preserve the installed Codex++ `create-tweak`, `validate-tweak`, and `dev` command shapes, while retaining every approved Claude++ difference in the spec.
+- Approved parser divergence (2026-08-21): Codex++ accepts repeated values/booleans as arrays, ignores extra positionals, and its Sade/MRI strict configuration rejects `--no-watch` because it checks `watch` while Sade registered `no-watch`. Claude++ rejects duplicate options and extra positionals deterministically, reports missing values directly, and supports the documented `dev --no-watch`; valid command shapes stay familiar. The user-visible impact is deterministic failures for malformed invocations plus a working one-shot development flag. The maintenance impact is that one internal strict parser must remain the authority for all three adapters and Task 6 must pass raw command arguments to it rather than rely on Sade/MRI parsing.
 - Use `@claude-plusplus/sdk.validateTweakManifest` as the only manifest validator; do not copy validation rules into the Installer.
 - Create/validate/dev never execute Tweak source.
 - Every accepted explicit or fallback entry must resolve canonically inside the canonical Tweak source directory and its canonical target must be a regular file. Reject explicit absolute, drive-qualified Windows, and `..` paths and in-project Junction/symlink paths whose canonical targets escape; out-of-tree build outputs must be copied or bundled into the project.

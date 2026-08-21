@@ -241,6 +241,7 @@ Tests follow red-green-refactor and cover:
 
 ## Approved Differences from Codex++
 
+- On 2026-08-21 the user approved this parser divergence: Codex++ accepts repeated values/booleans as arrays, ignores extra positionals, and its Sade/MRI strict configuration rejects `--no-watch` because it checks `watch` while Sade registered `no-watch`. Claude++ rejects duplicate options and extra positionals deterministically, reports missing values directly, and supports the documented `dev --no-watch`; valid command shapes stay familiar. The user-visible impact is that malformed authoring invocations fail instead of silently changing option shapes or ignoring arguments, while one-shot development works as documented. The maintenance impact is that all three adapters must continue to share one strict parser and Task 6 must pass raw command arguments to it instead of relying on Sade/MRI parsing.
 - `dev --name` is restricted and containment-checked; Codex++ accepts an arbitrary name.
 - Reload markers live in the Tweaks root rather than inside the linked source.
 - Generated projects omit the currently unpublished npm SDK dependency and default to runnable CommonJS.
