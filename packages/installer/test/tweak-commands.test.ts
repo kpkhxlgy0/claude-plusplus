@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -25,6 +28,8 @@ import { resolveClaudePlusPlusPaths, type ClaudePlusPlusPaths } from "../src/pat
 import {
   ensureDevTweakLink,
   prepareDevTweak,
+  unlinkDevTweakLink,
+  writeDevReloadMarker,
 } from "../src/tweak-dev-link.ts";
 import { requireValidTweakProject } from "../src/tweak-project.ts";
 import type { TweakCommandOutput } from "../src/tweak-output.ts";
@@ -471,6 +476,9 @@ test("dev preparation keeps a current Junction and refreshes the root marker", a
     assert.equal(lstatSync(current.linkPath).isSymbolicLink(), true);
     assert.equal(realpathSync(current.linkPath).toLowerCase(), realpathSync(source).toLowerCase());
     assert.equal(readFileSync(current.markerPath, "utf8"), "200");
+    assert.equal(lstatSync(current.markerPath).isFile(), true);
+    assert.equal(lstatSync(current.markerPath).nlink, 1);
+    assert.deepEqual(devMarkerTempNames(paths), []);
   });
 });
 
@@ -620,6 +628,164 @@ for (const name of ["", ".", "..", "a/b", "a\\b", "C:escape", "bad name"]) {
   });
 }
 
+for (const name of [".claudepp-dev-reload", ".CLAUDEPP-DEV-RELOAD"]) {
+  test(`dev preparation reserves the explicit reload marker name ${name} without mutation`, async () => {
+    await withDevFixture(async ({ root, source, paths }) => {
+      const before = snapshotTree(root);
+
+      assert.throws(
+        () => prepareDevTweak(source, { name }, { paths, output: silentOutput }),
+        /reserved reload marker/,
+      );
+      assert.equal(existsSync(paths.tweaks), false);
+      assert.deepEqual(snapshotTree(root), before);
+    });
+  });
+}
+
+for (const id of [".claudepp-dev-reload", ".ClAuDePp-DeV-ReLoAd"]) {
+  test(`dev preparation reserves the default reload marker manifest id ${id} without mutation`, async () => {
+    await withDevFixture(async ({ root, source, paths }) => {
+      replaceManifestId(source, id);
+      const before = snapshotTree(root);
+
+      assert.throws(
+        () => prepareDevTweak(source, {}, { paths, output: silentOutput }),
+        /reserved reload marker/,
+      );
+      assert.equal(existsSync(paths.tweaks), false);
+      assert.deepEqual(snapshotTree(root), before);
+    });
+  });
+}
+
+test("dev preparation rejects a marker file symlink before changing the current link", async () => {
+  await withDevFixture(async ({ root, source, paths }) => {
+    const { link, marker, other } = createMarkerCollisionFixture(root, source, paths);
+    const sourceEntry = join(source, "index.js");
+    const originalEntry = readFileSync(sourceEntry, "utf8");
+    unlinkSync(marker);
+    symlinkSync(sourceEntry, marker, "file");
+
+    assert.throws(
+      () => prepareDevTweak(other, { replace: true }, { paths, output: silentOutput }),
+      /reload marker.*regular file/i,
+    );
+    assert.equal(realpathSync(link).toLowerCase(), realpathSync(source).toLowerCase());
+    assert.equal(lstatSync(marker).isSymbolicLink(), true);
+    assert.equal(readFileSync(sourceEntry, "utf8"), originalEntry);
+    assert.deepEqual(devMarkerTempNames(paths), []);
+  });
+});
+
+test("dev preparation rejects a hard-linked marker before changing the current link", async () => {
+  await withDevFixture(async ({ root, source, paths }) => {
+    const { link, marker, other } = createMarkerCollisionFixture(root, source, paths);
+    const external = join(root, "external-marker.txt");
+    writeFileSync(external, "keep", "utf8");
+    unlinkSync(marker);
+    linkSync(external, marker);
+
+    assert.throws(
+      () => prepareDevTweak(other, { replace: true }, { paths, output: silentOutput }),
+      /reload marker.*single-link regular file/i,
+    );
+    assert.equal(realpathSync(link).toLowerCase(), realpathSync(source).toLowerCase());
+    assert.equal(lstatSync(marker).nlink, 2);
+    assert.equal(readFileSync(external, "utf8"), "keep");
+    assert.deepEqual(devMarkerTempNames(paths), []);
+  });
+});
+
+test("dev preparation rejects a marker Junction before changing the current link", async () => {
+  await withDevFixture(async ({ root, source, paths }) => {
+    const { link, marker, other } = createMarkerCollisionFixture(root, source, paths);
+    const external = join(root, "external-marker-directory");
+    mkdirSync(external);
+    writeFileSync(join(external, "keep.txt"), "keep", "utf8");
+    unlinkSync(marker);
+    symlinkSync(external, marker, "junction");
+
+    assert.throws(
+      () => prepareDevTweak(other, { replace: true }, { paths, output: silentOutput }),
+      /reload marker.*regular file/i,
+    );
+    assert.equal(realpathSync(link).toLowerCase(), realpathSync(source).toLowerCase());
+    assert.equal(realpathSync(marker).toLowerCase(), realpathSync(external).toLowerCase());
+    assert.equal(readFileSync(join(external, "keep.txt"), "utf8"), "keep");
+    assert.deepEqual(devMarkerTempNames(paths), []);
+  });
+});
+
+test("dev preparation rejects a marker directory before changing the current link", async () => {
+  await withDevFixture(async ({ root, source, paths }) => {
+    const { link, marker, other } = createMarkerCollisionFixture(root, source, paths);
+    unlinkSync(marker);
+    mkdirSync(marker);
+    writeFileSync(join(marker, "keep.txt"), "keep", "utf8");
+
+    assert.throws(
+      () => prepareDevTweak(other, { replace: true }, { paths, output: silentOutput }),
+      /reload marker.*regular file/i,
+    );
+    assert.equal(realpathSync(link).toLowerCase(), realpathSync(source).toLowerCase());
+    assert.equal(readFileSync(join(marker, "keep.txt"), "utf8"), "keep");
+    assert.deepEqual(devMarkerTempNames(paths), []);
+  });
+});
+
+test("dev marker atomic replacement never writes through a post-preflight symlink", async () => {
+  await withDevFixture(async ({ root, source, paths }) => {
+    const prepared = prepareDevTweak(source, {}, {
+      paths,
+      now: () => 100,
+      output: silentOutput,
+    });
+    const external = join(root, "post-preflight-target.txt");
+    writeFileSync(external, "keep", "utf8");
+    let renameArguments: [string, string] | undefined;
+
+    writeDevReloadMarker(paths, () => 200, {
+      rename(tempPath, markerPath) {
+        renameArguments = [tempPath, markerPath];
+        unlinkSync(markerPath);
+        symlinkSync(external, markerPath, "file");
+        renameSync(tempPath, markerPath);
+      },
+    });
+
+    assert.ok(renameArguments);
+    assert.equal(dirname(renameArguments[0]), paths.tweaks);
+    assert.equal(renameArguments[1], prepared.markerPath);
+    assert.equal(readFileSync(external, "utf8"), "keep");
+    assert.equal(lstatSync(prepared.markerPath).isFile(), true);
+    assert.equal(lstatSync(prepared.markerPath).isSymbolicLink(), false);
+    assert.equal(readFileSync(prepared.markerPath, "utf8"), "200");
+    assert.deepEqual(devMarkerTempNames(paths), []);
+  });
+});
+
+test("dev marker cleans its exclusive temporary file when atomic replacement fails", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const prepared = prepareDevTweak(source, {}, {
+      paths,
+      now: () => 100,
+      output: silentOutput,
+    });
+
+    assert.throws(
+      () => writeDevReloadMarker(paths, () => 200, {
+        rename() {
+          throw new Error("injected rename failure");
+        },
+      }),
+      /injected rename failure/,
+    );
+    assert.equal(readFileSync(prepared.markerPath, "utf8"), "100");
+    assert.deepEqual(devMarkerTempNames(paths), []);
+  });
+});
+
 test("dev link containment refuses the Tweaks root and preserves a sibling Junction", async () => {
   await withDevFixture(async ({ root, source, paths }) => {
     const other = join(root, "other-contained-source");
@@ -644,6 +810,37 @@ test("dev link containment refuses the Tweaks root and preserves a sibling Junct
       /immediate child/,
     );
     assert.equal(existsSync(paths.tweaks), false);
+  });
+});
+
+test("dev link unlink removes only a Junction entry and fails closed for directories or absence", async () => {
+  await withDevFixture(async ({ root, paths }) => {
+    mkdirSync(paths.tweaks, { recursive: true });
+    const target = join(root, "unlink-target");
+    mkdirSync(target);
+    writeFileSync(join(target, "keep.txt"), "keep", "utf8");
+    const junction = join(paths.tweaks, "junction");
+    symlinkSync(target, junction, "junction");
+
+    unlinkDevTweakLink(junction);
+
+    assert.equal(lstatSync(junction, { throwIfNoEntry: false }), undefined);
+    assert.equal(readFileSync(join(target, "keep.txt"), "utf8"), "keep");
+
+    const emptyDirectory = join(paths.tweaks, "empty-directory");
+    mkdirSync(emptyDirectory);
+    assert.throws(() => unlinkDevTweakLink(emptyDirectory));
+    assert.equal(lstatSync(emptyDirectory).isDirectory(), true);
+
+    const nonEmptyDirectory = join(paths.tweaks, "non-empty-directory");
+    mkdirSync(nonEmptyDirectory);
+    writeFileSync(join(nonEmptyDirectory, "keep.txt"), "keep", "utf8");
+    assert.throws(() => unlinkDevTweakLink(nonEmptyDirectory));
+    assert.equal(readFileSync(join(nonEmptyDirectory, "keep.txt"), "utf8"), "keep");
+
+    const absent = join(paths.tweaks, "absent");
+    assert.throws(() => unlinkDevTweakLink(absent));
+    assert.equal(lstatSync(absent, { throwIfNoEntry: false }), undefined);
   });
 });
 
@@ -771,6 +968,40 @@ function captureTweakOutput(): {
     warn,
     error,
   };
+}
+
+function replaceManifestId(source: string, id: string): void {
+  const manifestPath = join(source, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+  manifest.id = id;
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+}
+
+function createMarkerCollisionFixture(
+  root: string,
+  source: string,
+  paths: ClaudePlusPlusPaths,
+): { link: string; marker: string; other: string } {
+  const prepared = prepareDevTweak(source, {}, {
+    paths,
+    now: () => 100,
+    output: silentOutput,
+  });
+  const other = join(root, "marker-collision-source");
+  createTweak(other, {
+    id: "com.example.dev",
+    name: "Marker Collision",
+    repo: "example/marker-collision",
+    scope: "both",
+  }, silentOutput);
+  return { link: prepared.linkPath, marker: prepared.markerPath, other };
+}
+
+function devMarkerTempNames(paths: ClaudePlusPlusPaths): string[] {
+  if (!existsSync(paths.tweaks)) return [];
+  return readdirSync(paths.tweaks).filter((name) =>
+    /^\.claudepp-dev-reload\..+\.tmp$/i.test(name)
+  );
 }
 
 async function withDevFixture(

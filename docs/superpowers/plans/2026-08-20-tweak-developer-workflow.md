@@ -22,6 +22,8 @@
 - `--replace` removes only a validated contained Junction. It never removes a real file/directory or a broken/malformed reparse point.
 - The source watcher is Windows-only, recursive, debounced by 100 ms, ignores `node_modules` and Claude++ marker files, and never updates the marker after invalid source changes.
 - Write `.claudepp-dev-reload` directly under `paths.tweaks`; do not depend on Junction event propagation.
+- Reserve `.claudepp-dev-reload` case-insensitively as a link name, whether supplied by `--name` or `manifest.id`. Preflight an existing marker before link mutation, accept only absence or a single-link regular file, and refresh it through an exclusive unpredictable same-directory temporary file plus atomic rename so marker targets are never followed.
+- Replace only a freshly rechecked contained Junction with nonrecursive `unlinkSync`; never use recursive forced removal or directory removal. The supported boundary is trusted same-user local development: hostile same-user identity swaps in the final path-based deletion instant require native handles and are outside this plan.
 - Do not change the Runtime watcher, Chokidar's default `followSymlinks: true`, its 250 ms debounce, Tweak lifecycle order, lease revocation, Safe Mode, MCP architecture, or platform support. This explicitly retains Codex++ behavior: direct Junction events may reload an invalid edit; the validated root marker is supplemental, not a reload gate.
 - The portable ZIP contains a real `node_modules/@claude-plusplus/sdk`, never a workspace Junction.
 - Tests use temporary APPDATA/LOCALAPPDATA/USERPROFILE roots and injected watchers/signals; no test touches live Claude++ data.
@@ -535,6 +537,10 @@ async function withDevFixture(
 
 Add assertions for idempotent same-source linking, another valid source with the same id rejected without `replace`, replaced with `replace`, and marker refresh on idempotent linking. Assert a real file and real directory at the link path are rejected even with `replace`. Create a dangling Junction, then assert it is rejected and retained. On Windows, skip only that single dangling-Junction assertion if the fixture cannot create a Junction to a missing target; do not skip the rest of the test file.
 
+Table-drive the exact and case-variant reserved marker basename through both explicit `name` and default manifest ids, asserting no Tweaks-root or link mutation. With an existing development Junction, pre-create marker collisions as a file symlink, directory Junction, real directory, and hard-linked regular file; assert each is rejected before link replacement, every external/source target and the existing link are retained, and no marker temporary file remains. Cover normal marker refresh and an injected atomic-rename boundary that swaps in a symlink immediately after preflight: atomic replacement must replace the symlink entry without writing through its target. Inject a rename failure and assert the old marker remains and the exclusive temporary file is cleaned up.
+
+Add a real-filesystem test for the production unlink primitive: a Junction entry is removed while its target remains intact, but an empty directory, non-empty directory, and absent path each throw and remain unchanged. This test must fail if the primitive is changed to recursive forced `rmSync` or `rmdirSync`. A post-recheck hostile identity-swap lifecycle hook is not added solely for tests because that race is outside the approved trusted-local-development boundary.
+
 Prove validation precedes live-root mutation:
 
 ```ts
@@ -594,7 +600,7 @@ function assertImmediateTweakLink(linkPath: string, paths: ClaudePlusPlusPaths):
 }
 ```
 
-Canonicalize the source with `realpathSync` and require a directory. Detect the destination with `lstatSync(linkPath, { throwIfNoEntry: false })`, not `existsSync`, so dangling Junctions are visible. Reject non-symbolic links. If `existsSync(linkPath)` is false after a reparse-point `lstat`, reject it as broken. Otherwise resolve the target with `realpathSync(linkPath)`, catch and report malformed targets, require the result to be a directory, and compare canonical paths case-insensitively. If it is the same source, return `current`; if different and `replace` is false, throw; if different and `replace` is true, re-run containment/reparse checks immediately before `rmSync(linkPath, { recursive: true, force: true })`, then create the Junction.
+Canonicalize the source with `realpathSync` and require a directory. Detect the destination with `lstatSync(linkPath, { throwIfNoEntry: false })`, not `existsSync`, so dangling Junctions are visible. Reject non-symbolic links. If `existsSync(linkPath)` is false after a reparse-point `lstat`, reject it as broken. Otherwise resolve the target with `realpathSync(linkPath)`, catch and report malformed targets, require the result to be a directory, and compare canonical paths case-insensitively. If it is the same source, return `current`; if different and `replace` is false, throw; if different and `replace` is true, re-run containment/reparse checks immediately before nonrecursive `unlinkSync(linkPath)`, then create the Junction. Recursive forced `rmSync` and `rmdirSync` are expressly prohibited because they can remove a swapped real directory or hide absence.
 
 After source validation, immediate-child containment, and every collision/refusal preflight has succeeded, create `paths.tweaks` with `mkdirSync(paths.tweaks, { recursive: true })` immediately before creating a new Junction. Do not create the live Tweaks root for an invalid source, unsupported platform, invalid name, real-file/directory collision, broken link, or wrong-source collision without `--replace`.
 
@@ -608,17 +614,9 @@ Do not add a non-Windows link mode.
 
 - [ ] **Step 4: Implement the root marker and one-shot orchestrator**
 
-```ts
-export function writeDevReloadMarker(
-  paths: ClaudePlusPlusPaths,
-  now: () => number = Date.now,
-): string {
-  mkdirSync(paths.tweaks, { recursive: true });
-  const marker = join(paths.tweaks, ".claudepp-dev-reload");
-  writeFileSync(marker, String(now()), "utf8");
-  return marker;
-}
-```
+Reserve `.claudepp-dev-reload` in `validateTweakLinkName` using a case-insensitive comparison. Add a marker preflight helper using `lstatSync(marker, { throwIfNoEntry: false })`: an existing marker must be a non-symbolic regular file with `nlink === 1`; reject directories, all reparse points, hard-linked files, and unknown objects. `prepareDevTweak` must call this preflight after name/source validation and before `ensureDevTweakLink`, and `writeDevReloadMarker` repeats it for direct watcher calls.
+
+For a successful marker refresh, create an unpredictable temporary basename in `paths.tweaks`, open it with `openSync(temp, "wx")`, write and close it, then use same-directory `renameSync(temp, marker)` for atomic replacement. Never open the marker path for writing. Clean the known temporary entry with nonrecursive `unlinkSync` after success or failure, ignoring only `ENOENT`. A narrow optional rename-operation dependency is permitted to test the real atomic boundary without adding a test-only lifecycle callback. This adds one preflight `lstat` before link mutation and one exclusive temp-file/rename cycle per refresh; normal marker values, watcher calls, and hot reload remain unchanged.
 
 Use this dependency seam:
 

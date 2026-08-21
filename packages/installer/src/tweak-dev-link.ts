@@ -1,11 +1,15 @@
+import { randomBytes } from "node:crypto";
 import {
+  closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   realpathSync,
-  rmSync,
+  renameSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join, resolve, win32 } from "node:path";
@@ -43,11 +47,20 @@ export interface PrepareDevTweakDependencies {
   platform(): NodeJS.Platform;
 }
 
+export interface DevReloadMarkerDependencies {
+  rename(source: string, destination: string): void;
+}
+
+const DEV_RELOAD_MARKER = ".claudepp-dev-reload";
+
 export function validateTweakLinkName(name: string): string {
   if (name === "." || name === ".." || !/^[A-Za-z0-9._-]+$/.test(name)) {
     throw new Error(
       "Tweak link name may contain only letters, numbers, dots, underscores, and dashes",
     );
+  }
+  if (name.toLowerCase() === DEV_RELOAD_MARKER) {
+    throw new Error(`Tweak link name is the reserved reload marker: ${DEV_RELOAD_MARKER}`);
   }
   return name;
 }
@@ -90,19 +103,41 @@ export function ensureDevTweakLink(
     throw new Error(`Tweak link changed before replacement: ${linkPath}`);
   }
   if (sameWindowsPath(recheckedTarget, canonicalSource)) return "current";
-  rmSync(linkPath, { recursive: true, force: true });
+  unlinkDevTweakLink(linkPath);
   createJunction(canonicalSource, linkPath, paths);
   return "replaced";
+}
+
+export function unlinkDevTweakLink(linkPath: string): void {
+  unlinkSync(linkPath);
 }
 
 export function writeDevReloadMarker(
   paths: ClaudePlusPlusPaths,
   now: () => number = Date.now,
+  dependencies: Partial<DevReloadMarkerDependencies> = {},
 ): string {
+  const marker = assertDevReloadMarkerWritable(paths);
   mkdirSync(paths.tweaks, { recursive: true });
-  const marker = join(paths.tweaks, ".claudepp-dev-reload");
-  writeFileSync(marker, String(now()), "utf8");
-  return marker;
+  const temp = join(
+    paths.tweaks,
+    `${DEV_RELOAD_MARKER}.${randomBytes(16).toString("hex")}.tmp`,
+  );
+  let tempCreated = false;
+  try {
+    const descriptor = openSync(temp, "wx");
+    tempCreated = true;
+    try {
+      writeFileSync(descriptor, String(now()), "utf8");
+    } finally {
+      closeSync(descriptor);
+    }
+    (dependencies.rename ?? renameSync)(temp, marker);
+    tempCreated = false;
+    return marker;
+  } finally {
+    if (tempCreated) unlinkKnownTemporaryFile(temp);
+  }
 }
 
 export function prepareDevTweak(
@@ -128,6 +163,7 @@ export function prepareDevTweak(
   const paths = dependencies.paths ?? resolveClaudePlusPlusPaths();
   const linkName = validateTweakLinkName(options.name ?? project.manifest.id);
   const linkPath = join(paths.tweaks, linkName);
+  assertDevReloadMarkerWritable(paths);
   const linkStatus = ensureDevTweakLink(
     project.sourceDir,
     linkPath,
@@ -204,6 +240,33 @@ function createJunction(
   assertImmediateTweakLink(linkPath, paths);
   mkdirSync(paths.tweaks, { recursive: true });
   symlinkSync(canonicalSource, linkPath, "junction");
+}
+
+function assertDevReloadMarkerWritable(paths: ClaudePlusPlusPaths): string {
+  const marker = join(paths.tweaks, DEV_RELOAD_MARKER);
+  const markerStat = lstatSync(marker, { throwIfNoEntry: false });
+  if (markerStat === undefined) return marker;
+  if (markerStat.isSymbolicLink() || !markerStat.isFile()) {
+    throw new Error(
+      `Claude++ dev reload marker must be absent or a regular file: ${marker}`,
+    );
+  }
+  if (markerStat.nlink !== 1) {
+    throw new Error(
+      `Claude++ dev reload marker must be a single-link regular file: ${marker}`,
+    );
+  }
+  return marker;
+}
+
+function unlinkKnownTemporaryFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
 }
 
 function sameWindowsPath(left: string, right: string): boolean {

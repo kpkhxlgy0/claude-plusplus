@@ -98,7 +98,7 @@ claudeplusplus dev [target]
 
 The default target is `.`. Dev validates the source directory and entry before touching the live Tweaks directory.
 
-The source directory may live anywhere the user explicitly selects, but it must resolve to an existing directory containing a valid Tweak. The default link name is `manifest.id`. An explicit `--name` must use the same character set as a manifest id: letters, numbers, dots, underscores, and dashes. It cannot be empty, `.` or `..`, contain a path separator, or resolve anywhere except an immediate child of `paths.tweaks`.
+The source directory may live anywhere the user explicitly selects, but it must resolve to an existing directory containing a valid Tweak. The default link name is `manifest.id`. An explicit `--name` must use the same character set as a manifest id: letters, numbers, dots, underscores, and dashes. It cannot be empty, `.` or `..`, contain a path separator, resolve anywhere except an immediate child of `paths.tweaks`, or equal the reserved `.claudepp-dev-reload` basename in any letter case. The same reservation applies when the default manifest id supplies the link name, and it is checked before any Tweaks-root or link mutation.
 
 On Windows, the link is a directory Junction from `<paths.tweaks>/<link-name>` to the absolute source directory.
 
@@ -106,11 +106,11 @@ Collision behavior:
 
 - An existing Junction to the same source is idempotent.
 - An existing Junction to another source requires `--replace`.
-- `--replace` removes only that contained Junction and creates the new one.
+- `--replace` repeats the full contained, non-broken Junction check immediately before using nonrecursive `unlink` on that directory entry, then creates the new Junction. Recursive forced removal and directory removal are not used.
 - A real file or directory is never removed or replaced.
 - A malformed or broken existing reparse target is rejected rather than followed. A valid Junction target outside `paths.tweaks` is expected because it is the explicitly selected source project; containment applies to the live link path, not to that source.
 
-After the link is ready, write `.claudepp-dev-reload` directly under `paths.tweaks`. This root-level marker deliberately differs from Codex++'s marker-inside-link design so Windows reload signaling does not depend on Junction event propagation.
+Write `.claudepp-dev-reload` directly under `paths.tweaks`. This root-level marker deliberately differs from Codex++'s marker-inside-link design so Windows reload signaling does not depend on Junction event propagation. Before changing a link, preflight an existing marker with `lstat`: it must be absent or a single-link regular file. Directories, reparse points, hard-linked files, and unknown objects are rejected without changing the link. Marker refresh repeats that preflight, writes the timestamp to an unpredictable same-directory temporary file opened exclusively, and atomically renames the temporary entry over the marker. It never opens the marker for writing, so a pre-existing or post-preflight symlink/hardlink target is not followed. Temporary entries are removed nonrecursively after success or failure. The cost is one additional marker `lstat` before link mutation plus an exclusive temporary-file create/write/close and same-directory rename per successful marker refresh; normal Junction and reload behavior is unchanged.
 
 Without `--no-watch`, recursively watch the source directory. Ignore `node_modules` and changes to generated reload-marker names. Debounce events by 100 milliseconds. For each settled change:
 
@@ -213,12 +213,15 @@ Packaging copies the complete `docs/tweaks` directory in addition to `docs/tweak
 - Create never overwrites non-empty content.
 - Dev source targets are resolved and validated as Tweak directories; live link destinations are containment-checked before removal or creation.
 - Validation accepts an entry only when its canonical target is a regular file inside the canonical Tweak source directory. Explicit absolute, drive-qualified Windows, and traversal entries and in-project Junction/symlink escapes fail before dev linking.
-- `--replace` applies only to a contained reparse point; it never removes a real directory.
+- `--replace` applies only to a contained reparse point and removes its directory entry with nonrecursive `unlink`; it never uses recursive forced removal or removes a real directory.
+- The reload-marker basename is reserved case-insensitively. Marker preflight rejects reparse points, directories, multi-link regular files, and unknown objects before link mutation, while exclusive same-directory temporary writes plus atomic replacement avoid following marker targets.
 - Source validation errors never cause a live marker update.
 - Source validation is advisory rather than a Runtime reload barrier because the approved Runtime watcher continues following Junctions as Codex++ does.
 - The CLI does not execute Tweak source during create, validation, or link setup.
 - Main Tweaks remain trusted local Node.js code; manifest permissions constrain Claude++ API leases but are not an operating-system sandbox.
 - Documentation does not imply that Renderer Tweaks have Node `require`, that external MCP configuration is supported, or that private Claude internals are stable public APIs.
+
+The supported threat boundary is trusted same-user local development. Full checks are repeated immediately before path-based Junction deletion, but a hostile same-user process that atomically swaps a regular file or different link into that final path-based deletion instant is outside the guarantee. Eliminating that narrow race would require a native Windows handle-based implementation and is not part of this plan. The atomic marker replacement still never writes through a swapped target.
 
 ## Test Requirements
 
@@ -231,7 +234,9 @@ Tests follow red-green-refactor and cover:
 - No partial scaffold when generated manifest validation fails.
 - Validation of a generated Tweak, a direct manifest path, fallback entries, warnings, invalid JSON, SDK-invalid fields, missing explicit/fallback entries, explicit absolute/drive-qualified Windows/traversal escapes, canonical Junction/symlink escapes, and explicit/fallback directory entries.
 - Dev creation of a Windows Junction at the manifest id.
-- Idempotent same-source linking, wrong-source refusal, `--replace`, real-directory refusal, broken-link refusal, and link-name containment.
+- Idempotent same-source linking, wrong-source refusal, `--replace`, real-directory refusal, broken-link refusal, link-name containment, and case-insensitive reservation of the root-marker basename for both explicit names and manifest ids.
+- Marker preflight refusal for symlinks, Junctions, directories, hard links, and unknown objects before link mutation; retained external/source targets; atomic normal refresh; post-preflight target-swap safety; and no temporary artifacts after success or failure.
+- A real filesystem primitive regression proving nonrecursive unlink removes a Junction without target damage while empty directories, non-empty directories, and absence fail and are retained.
 - `--no-watch` exits after linking and marker creation.
 - Injected watcher tests prove debounce, `node_modules` filtering, valid marker updates, invalid no-update behavior, and signal cleanup without waiting on real filesystem timing.
 - Existing Runtime tests continue to prove serialized Main/Renderer reload and lease revocation.
@@ -244,6 +249,8 @@ Tests follow red-green-refactor and cover:
 - On 2026-08-21 the user approved this parser divergence: Codex++ accepts repeated values/booleans as arrays, ignores extra positionals, and its Sade/MRI strict configuration rejects `--no-watch` because it checks `watch` while Sade registered `no-watch`. Claude++ rejects duplicate options and extra positionals deterministically, reports missing values directly, and supports the documented `dev --no-watch`; valid command shapes stay familiar. The user-visible impact is that malformed authoring invocations fail instead of silently changing option shapes or ignoring arguments, while one-shot development works as documented. The maintenance impact is that all three adapters must continue to share one strict parser and Task 6 must pass raw command arguments to it instead of relying on Sade/MRI parsing.
 - `dev --name` is restricted and containment-checked; Codex++ accepts an arbitrary name.
 - Reload markers live in the Tweaks root rather than inside the linked source.
+- The root-marker basename is reserved case-insensitively for explicit link names and manifest ids. Marker writes preflight for a single-link regular file and use exclusive same-directory temporary files plus atomic replacement rather than opening the marker path.
+- Wrong-source replacement uses nonrecursive Junction unlink after an immediate full recheck. Hostile same-user identity swapping in the final path-based deletion instant is explicitly outside the trusted local-development guarantee; native-handle deletion is not included.
 - Generated projects omit the currently unpublished npm SDK dependency and default to runnable CommonJS.
 - Development links are Windows Junctions only in this release.
 - Unlike Codex++, Claude++ accepts explicit and fallback entries only when the canonical target is a regular file inside the canonical Tweak source project. Absolute, drive-qualified Windows, and `..` entries and in-project Junction/symlink escapes are rejected; out-of-tree build outputs must be copied or bundled into the project.
