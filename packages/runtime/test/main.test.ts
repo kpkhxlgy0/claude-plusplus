@@ -853,7 +853,7 @@ test("proxies Renderer filesystem access only for a declared Tweak", async () =>
   }
 });
 
-test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks for startup", async () => {
+test("Safe Mode cold start keeps management IPC but registers no Renderer preload", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-safe-"));
   try {
     mkdirSync(root, { recursive: true });
@@ -873,15 +873,13 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const desktopMcpService = new FakeDesktopMcpService();
     let willQuit: FakeWillQuitListener | undefined;
+    let sessionCreated: ((session: Record<string, unknown>) => void) | undefined;
     const electron = fakeElectron(
       fakeSession(
-        () => {
-          registrationCount += 1;
-          return "claude-plusplus";
-        },
+        () => { registrationCount += 1; return "default-safe-mode"; },
         () => { cspHookCount += 1; },
       ),
-      undefined,
+      (listener) => { sessionCreated = listener; },
       undefined,
       (channel, handler) => handlers.set(channel, handler),
       undefined,
@@ -896,12 +894,18 @@ test("Safe Mode keeps the Renderer management bridge but does not expose Tweaks 
       claudeCodeSettings: codeSettings(root),
       desktopMcpService,
     });
+    assert.ok(sessionCreated);
+    sessionCreated?.(fakeSession(
+      () => { registrationCount += 1; return "late-safe-mode"; },
+      () => { cspHookCount += 1; },
+    ));
     const payload = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{ enabled: boolean }>;
     willQuit?.({ preventDefault() {} });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    assert.equal(registrationCount, 1);
+    assert.equal(registrationCount, 0);
     assert.equal(cspHookCount, 0);
+    assert.equal(handlers.has("claudepp:list-tweaks"), true);
     assert.deepEqual(payload.map((item) => item.enabled), [false]);
     assert.deepEqual(desktopMcpService.created, []);
     assert.equal(desktopMcpService.disposeCount, 1);

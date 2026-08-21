@@ -64,7 +64,7 @@ test("filesystem changes debounce to one reload and ignore node_modules", async 
   const dispose = manager.watch("D:\\tweaks");
 
   allListener?.("change", "D:\\tweaks\\com.example.one\\index.js");
-  allListener?.("change", "D:\\tweaks\\com.example.one\\manifest.json");
+  allListener?.("change", "D:\\tweaks\\.claudepp-safe-mode-reload");
   if (!ignored?.("D:\\tweaks\\com.example.one\\node_modules\\pkg\\index.js")) {
     allListener?.("change", "D:\\tweaks\\com.example.one\\node_modules\\pkg\\index.js");
   }
