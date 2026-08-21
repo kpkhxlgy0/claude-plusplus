@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import * as asar from "@electron/asar";
-import { injectClaudePlusPlusLoader, inspectClaudePlusPlusLoader } from "../src/asar.ts";
+import {
+  injectClaudePlusPlusLoader,
+  inspectClaudePlusPlusLoader,
+  readAsarHeaderHash,
+} from "../src/asar.ts";
 import { resolveClaudePlusPlusPaths } from "../src/paths.ts";
 
 test("injects Claude++ metadata and preserves the original main across reinjection", async () => {
@@ -61,6 +66,12 @@ test("injects Claude++ metadata and preserves the original main across reinjecti
       readFileSync(loaderPath, "utf8"),
     );
     assert.deepEqual(inspectClaudePlusPlusLoader(asarPath), second);
+    const raw = (asar as unknown as {
+      getRawHeader(path: string): { headerString: string };
+    }).getRawHeader(asarPath);
+    const expected = createHash("sha256").update(raw.headerString).digest("hex");
+    assert.equal(readAsarHeaderHash(asarPath), expected);
+    assert.match(expected, /^[0-9a-f]{64}$/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

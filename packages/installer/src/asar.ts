@@ -1,5 +1,5 @@
 import * as asar from "@electron/asar";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   copyFile,
   mkdtemp,
@@ -34,6 +34,14 @@ export interface ClaudePlusPlusLoaderInspection {
   originalMain: string;
   injectedMain: typeof loaderName;
   metadata: ClaudePlusPlusLoaderMetadata;
+}
+
+export function readAsarHeaderHash(asarPath: string): string {
+  clearAsarCache(asarPath);
+  const raw = (asar as unknown as {
+    getRawHeader(path: string): { headerString: string };
+  }).getRawHeader(asarPath);
+  return createHash("sha256").update(raw.headerString).digest("hex");
 }
 
 export async function injectClaudePlusPlusLoader(

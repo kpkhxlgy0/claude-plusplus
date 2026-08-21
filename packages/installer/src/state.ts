@@ -2,8 +2,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 
-export interface ClaudePlusPlusState {
-  schemaVersion: 1;
+interface ClaudePlusPlusStateBase {
   claudePlusPlusVersion: string;
   packageFullName: string;
   packageVersion: string;
@@ -15,6 +14,18 @@ export interface ClaudePlusPlusState {
   installedAt: string;
   watcher?: "scheduled-task" | "none";
 }
+
+export interface ClaudePlusPlusStateV1 extends ClaudePlusPlusStateBase {
+  schemaVersion: 1;
+}
+
+export interface ClaudePlusPlusStateV2 extends ClaudePlusPlusStateBase {
+  schemaVersion: 2;
+  originalAsarHash: string;
+  patchedAsarHash: string;
+}
+
+export type ClaudePlusPlusState = ClaudePlusPlusStateV1 | ClaudePlusPlusStateV2;
 
 export type SelfUpdateChannel = "stable" | "prerelease" | "custom";
 export type SelfUpdateStatus = "checking" | "up-to-date" | "updated" | "failed" | "disabled";
@@ -36,28 +47,29 @@ export interface SelfUpdateState {
 
 export function readClaudePlusPlusState(path: string): ClaudePlusPlusState | null {
   try {
-    const value = JSON.parse(readFileSync(path, "utf8")) as Partial<ClaudePlusPlusState>;
-    if (
-      value.schemaVersion !== 1 ||
-      typeof value.claudePlusPlusVersion !== "string" ||
-      typeof value.packageFullName !== "string" ||
-      typeof value.packageVersion !== "string" ||
-      typeof value.officialAppRoot !== "string" ||
-      typeof value.managedAppRoot !== "string" ||
-      typeof value.managedExecutable !== "string" ||
-      typeof value.asarPath !== "string" ||
-      typeof value.originalMain !== "string" ||
-      typeof value.installedAt !== "string"
-    ) {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!isRecord(parsed) || (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2)) return null;
+    const common = readClaudePlusPlusStateBase(parsed);
+    if (!common) return null;
+    if (parsed.schemaVersion === 1) return { schemaVersion: 1, ...common };
+    if (!isLowercaseSha256(parsed.originalAsarHash) || !isLowercaseSha256(parsed.patchedAsarHash)) {
       return null;
     }
     return {
-      ...value,
-      watcher: value.watcher === "scheduled-task" ? "scheduled-task" : "none",
-    } as ClaudePlusPlusState;
+      schemaVersion: 2,
+      ...common,
+      originalAsarHash: parsed.originalAsarHash,
+      patchedAsarHash: parsed.patchedAsarHash,
+    };
   } catch {
     return null;
   }
+}
+
+export function isClaudePlusPlusStateV2(
+  state: ClaudePlusPlusState | null,
+): state is ClaudePlusPlusStateV2 {
+  return state?.schemaVersion === 2;
 }
 
 export function writeClaudePlusPlusState(path: string, state: ClaudePlusPlusState): void {
@@ -89,4 +101,42 @@ export function writeJsonAtomic(path: string, value: unknown): void {
   } finally {
     rmSync(staging, { force: true });
   }
+}
+
+function readClaudePlusPlusStateBase(
+  value: Record<string, unknown>,
+): ClaudePlusPlusStateBase | null {
+  if (
+    typeof value.claudePlusPlusVersion !== "string" ||
+    typeof value.packageFullName !== "string" ||
+    typeof value.packageVersion !== "string" ||
+    typeof value.officialAppRoot !== "string" ||
+    typeof value.managedAppRoot !== "string" ||
+    typeof value.managedExecutable !== "string" ||
+    typeof value.asarPath !== "string" ||
+    typeof value.originalMain !== "string" ||
+    typeof value.installedAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    claudePlusPlusVersion: value.claudePlusPlusVersion,
+    packageFullName: value.packageFullName,
+    packageVersion: value.packageVersion,
+    officialAppRoot: value.officialAppRoot,
+    managedAppRoot: value.managedAppRoot,
+    managedExecutable: value.managedExecutable,
+    asarPath: value.asarPath,
+    originalMain: value.originalMain,
+    installedAt: value.installedAt,
+    watcher: value.watcher === "scheduled-task" ? "scheduled-task" : "none",
+  };
+}
+
+function isLowercaseSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
