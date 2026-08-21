@@ -95,6 +95,16 @@ test("trusted schema 2 non-current maintenance preserves its mirror and original
       join(fixture.options.sourceRoot, "packages", "runtime", "dist", "main.js"),
       "module.exports = { maintained: true };\n",
     );
+    const loaderPath = join(
+      fixture.options.sourceRoot,
+      "packages",
+      "loader",
+      "loader.cjs",
+    );
+    writeFileSync(
+      loaderPath,
+      `${readFileSync(loaderPath, "utf8")}\n// claudepp-maintenance-loader-marker\n`,
+    );
 
     const result = await installClaudePlusPlus(fixture.options, fixture.deps);
     const maintained = readClaudePlusPlusState(fixture.paths.stateFile);
@@ -107,6 +117,10 @@ test("trusted schema 2 non-current maintenance preserves its mirror and original
     assert.equal(
       readFileSync(join(fixture.paths.runtime, "main.js"), "utf8"),
       "module.exports = { maintained: true };\n",
+    );
+    assert.match(
+      asar.extractFile(maintained.asarPath, "claude-plusplus-loader.cjs").toString("utf8"),
+      /claudepp-maintenance-loader-marker/,
     );
     assert.equal(readFileSync(join(state.managedAppRoot, "managed-only.txt"), "utf8"), "keep");
     assert.equal(existsSync(join(state.managedAppRoot, "late-official.txt")), false);
