@@ -104,6 +104,20 @@ try {
         }
         Remove-Item -LiteralPath $workspaceLinks -Force
     }
+    $sdkSource = Join-Path $payload 'packages\sdk'
+    $sdkPackageJson = Join-Path $sdkSource 'package.json'
+    $sdkDist = Join-Path $sdkSource 'dist'
+    if (!(Test-Path -LiteralPath $sdkPackageJson -PathType Leaf)) {
+        throw "Packaged SDK source metadata is missing: $sdkPackageJson"
+    }
+    if (!(Test-Path -LiteralPath $sdkDist -PathType Container)) {
+        throw "Packaged SDK source dist is missing: $sdkDist"
+    }
+    $sdkTarget = Join-Path $payload 'node_modules\@claude-plusplus\sdk'
+    Assert-ChildPath $payload $sdkTarget 'Packaged SDK dependency'
+    New-Item -ItemType Directory -Force -Path $sdkTarget | Out-Null
+    Copy-Item -LiteralPath $sdkPackageJson -Destination $sdkTarget
+    Copy-Item -LiteralPath $sdkDist -Destination $sdkTarget -Recurse
     $packageBins = Join-Path $payload 'node_modules\.bin'
     Get-ChildItem -LiteralPath $packageBins -Force |
         Where-Object { $_.Name -like 'claude-plusplus*' -or $_.Name -like 'claudeplusplus*' } |

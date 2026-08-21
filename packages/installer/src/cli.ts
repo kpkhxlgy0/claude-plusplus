@@ -1,14 +1,22 @@
 #!/usr/bin/env node
 
+import { createTweak } from "./commands/create-tweak.js";
 import { getDebugInfo } from "./commands/debug.js";
+import { devTweak } from "./commands/dev-tweak.js";
 import { doctorClaudePlusPlus } from "./commands/doctor.js";
 import { installClaudePlusPlus } from "./commands/install.js";
 import { launchClaudePlusPlus } from "./commands/launch.js";
 import { repairClaudePlusPlus } from "./commands/repair.js";
 import { getClaudePlusPlusStatus } from "./commands/status.js";
 import { parseSelfUpdateArguments, selfUpdate } from "./commands/self-update.js";
+import { validateTweak } from "./commands/validate-tweak.js";
 import { runWatcherCommand } from "./commands/watcher.js";
 import { RECOVERY_HELP_TEXT, runRecoveryCli } from "./cli-recovery.js";
+import {
+  parseCreateTweakArguments,
+  parseDevTweakArguments,
+  parseValidateTweakArguments,
+} from "./tweak-arguments.js";
 
 const version = "0.2.9";
 
@@ -51,6 +59,23 @@ async function main(argv: string[]): Promise<void> {
       launchClaudePlusPlus();
       print({ launched: true });
       return;
+    case "create-tweak": {
+      const parsed = parseCreateTweakArguments(argv.slice(1));
+      const { target, ...options } = parsed;
+      createTweak(target, options);
+      return;
+    }
+    case "validate-tweak": {
+      const { target } = parseValidateTweakArguments(argv.slice(1));
+      validateTweak(target);
+      return;
+    }
+    case "dev": {
+      const parsed = parseDevTweakArguments(argv.slice(1));
+      const { target, ...options } = parsed;
+      await devTweak(target, options);
+      return;
+    }
     default:
       throw new Error(`Unknown Claude++ command: ${command}`);
   }
@@ -79,6 +104,12 @@ Commands:
                        Manage the optional logon and five-minute repair tasks
 ${RECOVERY_HELP_TEXT}
   launch               Launch the managed Claude app
+  create-tweak <target> [--id <id>] [--name <display-name>] [--repo <owner/repo>] [--scope renderer|main|both] [--force]
+                       Scaffold a new local Tweak
+  validate-tweak [target]
+                       Validate a Tweak manifest and entry point
+  dev [target] [--name <link-name>] [--replace] [--no-watch]
+                       Link a Tweak into the Claude++ Tweaks directory for local development
 `);
 }
 

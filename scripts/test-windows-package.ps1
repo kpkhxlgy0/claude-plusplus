@@ -61,8 +61,24 @@ try {
     if (!(Test-Path -LiteralPath $command)) {
         throw "Packaged CLI is missing: $command"
     }
-    if (Test-Path -LiteralPath (Join-Path $extract 'node_modules\@claude-plusplus')) {
-        throw 'Packaged CLI contains Claude++ workspace links'
+    $workspaceNamespace = Join-Path $extract 'node_modules\@claude-plusplus'
+    if (!(Test-Path -LiteralPath $workspaceNamespace -PathType Container)) {
+        throw 'Packaged CLI is missing the Claude++ dependency namespace'
+    }
+    $workspaceDependencies = @(Get-ChildItem -LiteralPath $workspaceNamespace -Force |
+        Select-Object -ExpandProperty Name |
+        Sort-Object)
+    if (@(Compare-Object @('sdk') $workspaceDependencies).Count -ne 0) {
+        throw "Expected exactly the packaged SDK dependency; received: $($workspaceDependencies -join ', ')"
+    }
+    $packagedSdk = Join-Path $workspaceNamespace 'sdk'
+    if (((Get-Item -LiteralPath $packagedSdk -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Packaged SDK dependency is a reparse point'
+    }
+    foreach ($requiredSdkPath in @('package.json', 'dist\index.js', 'dist\index.d.ts')) {
+        if (!(Test-Path -LiteralPath (Join-Path $packagedSdk $requiredSdkPath))) {
+            throw "Packaged SDK dependency is missing: $requiredSdkPath"
+        }
     }
     $staleWorkspaceBins = Get-ChildItem -LiteralPath (Join-Path $extract 'node_modules\.bin') -Force |
         Where-Object { $_.Name -like 'claude-plusplus*' -or $_.Name -like 'claudeplusplus*' }
@@ -79,6 +95,19 @@ try {
         $env:LOCALAPPDATA = Join-Path $testRoot 'profile\localappdata'
         $env:USERPROFILE = Join-Path $testRoot 'profile'
         New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA, $env:USERPROFILE | Out-Null
+        $helpOutput = (& $command help 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw "Packaged help exited with code $LASTEXITCODE`: $helpOutput"
+        }
+        foreach ($commandShape in @(
+            'create-tweak <target>',
+            'validate-tweak [target]',
+            'dev [target] [--name <link-name>] [--replace] [--no-watch]'
+        )) {
+            if (!$helpOutput.Contains($commandShape)) {
+                throw "Packaged help is missing command shape: $commandShape"
+            }
+        }
         $output = (& $command --version 2>&1 | Out-String).Trim()
         if ($LASTEXITCODE -ne 0) {
             throw "Packaged CLI exited with code $LASTEXITCODE`: $output"
@@ -102,6 +131,32 @@ try {
                 throw "Packaged Doctor is missing check: $requiredCheck"
             }
         }
+        $tweakSource = Join-Path $testRoot 'authoring\package-smoke'
+        & $command create-tweak $tweakSource --id com.example.package-smoke --name 'Package Smoke' --repo example/package-smoke --scope both
+        if ($LASTEXITCODE -ne 0) { throw 'Packaged create-tweak failed' }
+        & $command validate-tweak $tweakSource
+        if ($LASTEXITCODE -ne 0) { throw 'Packaged validate-tweak failed' }
+        & $command dev $tweakSource --no-watch
+        if ($LASTEXITCODE -ne 0) { throw 'Packaged dev --no-watch failed' }
+
+        $liveRoot = Join-Path $env:APPDATA 'claude-plusplus\tweaks'
+        $liveLink = Join-Path $liveRoot 'com.example.package-smoke'
+        if (!(Test-Path -LiteralPath $liveLink)) { throw 'Packaged dev link is missing' }
+        if (((Get-Item -LiteralPath $liveLink -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+            throw 'Packaged dev link is not a Junction'
+        }
+        $liveMarker = Join-Path $liveRoot '.claudepp-dev-reload'
+        if (!(Test-Path -LiteralPath $liveMarker)) {
+            throw 'Packaged dev reload marker is missing'
+        }
+
+        $resolvedProfileRoot = [System.IO.Path]::GetFullPath((Join-Path $testRoot 'profile')).TrimEnd('\') + '\'
+        foreach ($isolatedPath in @($liveLink, $liveMarker)) {
+            $resolvedIsolatedPath = [System.IO.Path]::GetFullPath($isolatedPath)
+            if (!$resolvedIsolatedPath.StartsWith($resolvedProfileRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Packaged dev artifact escaped the isolated profile: $resolvedIsolatedPath"
+            }
+        }
     } finally {
         $env:PATH = $previousPath
         $env:APPDATA = $previousAppData
@@ -111,7 +166,7 @@ try {
     if ($output -ne '0.2.9') {
         throw "Expected packaged CLI version 0.2.9, received: $output"
     }
-    Write-Output "Packaged CLI version, status, and Doctor passed without system Node.js or npm on PATH."
+    Write-Output "Packaged CLI version, status, Doctor, and Tweak authoring passed without system Node.js or npm on PATH."
     Write-Output "Package SHA-256: $actualHash"
 } finally {
     $resolvedTestRoot = [System.IO.Path]::GetFullPath($testRoot)
