@@ -5,6 +5,36 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.3.0
+
+Release notes: [docs/releases/0.3.0.md](docs/releases/0.3.0.md)
+
+### Added
+
+- Added the Windows-local `create-tweak`, `validate-tweak`, and `dev` workflow with runnable CommonJS scaffolds,
+  SDK-backed validation, contained Junction links, watched validation, and command-local help.
+- Added a complete Tweak authoring guide and materialized the Claude++ SDK in the portable Windows package so the
+  packaged authoring commands work without an npm-published SDK.
+- Added full Safe Mode `--on`, `--off`, and `--status` controls, plus managed-ASAR provenance in `status` and
+  `doctor`.
+
+### Changed
+
+- Trust a managed mirror only when schema-2 provenance exists, its package identity agrees, and its current ASAR
+  raw-header hash matches the recorded patched hash; rebuild legacy or untrusted mirrors from the official package.
+
+### Fixed
+
+- Roll back an uncommitted managed-mirror refresh when preparation or injection fails, and clean known managed
+  mirrors during uninstall even when installer state is missing or malformed.
+- Preserve unreadable or invalid Safe Mode configuration instead of replacing it, and omit Renderer preload/CSP
+  registration on a Safe Mode cold start.
+
+### Security
+
+- Hardened Tweak entry and development-link handling against path escapes, unsafe or reserved names, broken links,
+  marker redirection, and recursive replacement of user content.
+
 ## 0.2.9
 
 Release notes: [docs/releases/0.2.9.md](docs/releases/0.2.9.md)
