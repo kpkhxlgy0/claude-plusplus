@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   existsSync,
   mkdirSync,
@@ -7,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -147,6 +149,50 @@ test("project inspection reports exact explicit and fallback missing-entry issue
       },
     ]);
     assert.equal(fallback.entryPath, null);
+  });
+});
+
+test("project inspection reports a missing entry when the source disappears after manifest reading", () => {
+  for (const fixture of [
+    {
+      manifest: validManifest,
+      expected: "entry file does not exist: index.js",
+    },
+    {
+      manifest: (({ main: _main, ...manifest }) => manifest)(validManifest),
+      expected: "no entry file found; expected one of index.js, index.cjs, index.mjs",
+    },
+  ]) {
+    withTempDir((root) => {
+      writeManifest(root, fixture.manifest);
+      writeFileSync(join(root, "index.js"), "module.exports = {};\n");
+
+      const inspection = withSourceCanonicalization(root, () => {
+        rmSync(root, { recursive: true, force: true });
+      }, () => inspectTweakProject(root));
+
+      assert.equal(inspection.entryPath, null);
+      assert.deepEqual(inspection.errors, [
+        { path: "main", message: fixture.expected },
+      ]);
+    });
+  }
+});
+
+test("project inspection preserves non-missing source canonicalization errors", () => {
+  withTempDir((root) => {
+    writeManifest(root, validManifest);
+    writeFileSync(join(root, "index.js"), "module.exports = {};\n");
+    const denied = Object.assign(new Error("source canonicalization denied"), {
+      code: "EACCES",
+    });
+
+    assert.throws(
+      () => withSourceCanonicalization(root, () => {
+        throw denied;
+      }, () => inspectTweakProject(root)),
+      (error: unknown) => error === denied,
+    );
   });
 });
 
@@ -482,4 +528,29 @@ function captureOutput(): {
     warn,
     error,
   };
+}
+
+function withSourceCanonicalization<T>(
+  sourceDir: string,
+  beforeCanonicalization: () => void,
+  run: () => T,
+): T {
+  const originalRealpathSync = fs.realpathSync;
+  let intercepted = false;
+  const replacement = ((...args: unknown[]) => {
+    if (!intercepted && resolve(String(args[0])) === resolve(sourceDir)) {
+      intercepted = true;
+      beforeCanonicalization();
+    }
+    return Reflect.apply(originalRealpathSync, fs, args);
+  }) as typeof fs.realpathSync;
+
+  Reflect.set(fs, "realpathSync", replacement);
+  syncBuiltinESMExports();
+  try {
+    return run();
+  } finally {
+    Reflect.set(fs, "realpathSync", originalRealpathSync);
+    syncBuiltinESMExports();
+  }
 }

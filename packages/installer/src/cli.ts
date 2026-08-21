@@ -20,6 +20,44 @@ import {
 
 const version = "0.2.9";
 
+const tweakCommandHelp = new Map<string, string>([
+  ["create-tweak", `
+  Description
+    Scaffold a new local Tweak
+
+  Usage
+    $ claudeplusplus create-tweak <target> [options]
+
+  Options
+    --id <id>                         Manifest id, for example com.you.my-tweak
+    --name <display-name>             Human-readable Tweak name
+    --repo <owner/repo>               GitHub repository in owner/repo form
+    --scope renderer|main|both        Tweak process scope
+    --force                           Write into an existing empty directory
+    -h, --help                        Display this command help`],
+  ["validate-tweak", `
+  Description
+    Validate a Tweak manifest and entry point
+
+  Usage
+    $ claudeplusplus validate-tweak [target] [options]
+
+  Options
+    -h, --help                        Display this command help`],
+  ["dev", `
+  Description
+    Link a Tweak into the Claude++ Tweaks directory for local development
+
+  Usage
+    $ claudeplusplus dev [target] [options]
+
+  Options
+    --name <link-name>                Override the linked directory name
+    --replace                         Replace an existing Tweak Junction
+    --no-watch                        Link once and exit without watching
+    -h, --help                        Display this command help`],
+]);
+
 async function main(argv: string[]): Promise<void> {
   const command = argv[0];
   if (!command || command === "help" || command === "--help" || command === "-h") {
@@ -28,6 +66,15 @@ async function main(argv: string[]): Promise<void> {
   }
   if (command === "--version" || command === "-v" || command === "version") {
     console.log(version);
+    return;
+  }
+  const commandHelp = tweakCommandHelp.get(command);
+  if (
+    argv.length === 2 &&
+    (argv[1] === "-h" || argv[1] === "--help") &&
+    commandHelp !== undefined
+  ) {
+    console.log(commandHelp);
     return;
   }
   if (await runRecoveryCli(command, argv.slice(1))) return;

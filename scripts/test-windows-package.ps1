@@ -62,6 +62,28 @@ function Remove-ContainedReparseEntry([string]$LinkPath, [string]$ProfileRoot) {
     }
 }
 
+function Get-DisposableTreeSnapshot([string]$Root) {
+    $resolvedRoot = Get-NormalizedAbsolutePath $Root
+    $rootItem = Get-Item -LiteralPath $resolvedRoot -Force -ErrorAction SilentlyContinue
+    if ($null -eq $rootItem) { return @("missing:$resolvedRoot") }
+    if (($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        return @("root-reparse:$resolvedRoot`:$($rootItem.LinkType)`:$(@($rootItem.Target) -join '|')")
+    }
+    if (!$rootItem.PSIsContainer) {
+        return @("root-file:$resolvedRoot`:$((Get-FileHash -LiteralPath $resolvedRoot -Algorithm SHA256).Hash)")
+    }
+    return @("root-directory:$resolvedRoot") + @(Get-ChildItem -LiteralPath $resolvedRoot -Recurse -Force |
+        Sort-Object FullName |
+        ForEach-Object {
+            $relativePath = [System.IO.Path]::GetRelativePath($resolvedRoot, $_.FullName)
+            if (($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                return "reparse:$relativePath`:$($_.LinkType)`:$(@($_.Target) -join '|')"
+            }
+            if ($_.PSIsContainer) { return "directory:$relativePath" }
+            return "file:$relativePath`:$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+        })
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $archive = Join-Path $repoRoot 'dist\claude-plusplus-0.2.9-win-x64.zip'
 $archiveHash = "$archive.sha256"
@@ -187,6 +209,79 @@ try {
         $liveRoot = Join-Path $env:APPDATA 'claude-plusplus\tweaks'
         $liveLink = Join-Path $liveRoot 'com.example.package-smoke'
         $liveMarker = Join-Path $liveRoot '.claudepp-dev-reload'
+        $tweakSource = Join-Path $testRoot 'authoring\package-smoke'
+        $commandHelpMutationRoots = @(
+            $tweakSource,
+            (Join-Path $env:APPDATA 'claude-plusplus'),
+            (Join-Path $env:LOCALAPPDATA 'claude-plusplus'),
+            (Join-Path $env:USERPROFILE '.claude-plusplus')
+        )
+        $beforeCommandHelp = @($commandHelpMutationRoots | ForEach-Object {
+            Get-DisposableTreeSnapshot $_
+        })
+        foreach ($helpCase in @(
+            @{
+                Command = 'create-tweak'
+                Description = 'Scaffold a new local Tweak'
+                Usage = '$ claudeplusplus create-tweak <target> [options]'
+                Options = @('--id <id>', '--name <display-name>', '--repo <owner/repo>', '--scope renderer|main|both', '--force', '-h, --help')
+                Absent = @('--no-watch')
+            },
+            @{
+                Command = 'validate-tweak'
+                Description = 'Validate a Tweak manifest and entry point'
+                Usage = '$ claudeplusplus validate-tweak [target] [options]'
+                Options = @('-h, --help')
+                Absent = @('--id <id>', '--no-watch')
+            },
+            @{
+                Command = 'dev'
+                Description = 'Link a Tweak into the Claude++ Tweaks directory for local development'
+                Usage = '$ claudeplusplus dev [target] [options]'
+                Options = @('--name <link-name>', '--replace', '--no-watch', '-h, --help')
+                Absent = @('--scope renderer|main|both')
+            }
+        )) {
+            foreach ($helpFlag in @('-h', '--help')) {
+                $commandName = $helpCase.Command
+                $commandHelpOutput = (& $command $commandName $helpFlag 2>&1 | Out-String).Trim()
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Packaged $commandName $helpFlag exited with code $LASTEXITCODE`: $commandHelpOutput"
+                }
+                if (!$commandHelpOutput.Contains($helpCase.Usage)) {
+                    throw "Packaged $commandName $helpFlag is missing usage: $($helpCase.Usage)"
+                }
+                if (!$commandHelpOutput.Contains("Description`n    $($helpCase.Description)") -and
+                    !$commandHelpOutput.Contains("Description`r`n    $($helpCase.Description)")) {
+                    throw "Packaged $commandName $helpFlag is missing its description: $($helpCase.Description)"
+                }
+                if ($commandHelpOutput.IndexOf('Description') -ge $commandHelpOutput.IndexOf('Usage') -or
+                    $commandHelpOutput.IndexOf('Usage') -ge $commandHelpOutput.IndexOf('Options')) {
+                    throw "Packaged $commandName $helpFlag has the wrong help section order"
+                }
+                foreach ($expectedOption in $helpCase.Options) {
+                    if (!$commandHelpOutput.Contains($expectedOption)) {
+                        throw "Packaged $commandName $helpFlag is missing option: $expectedOption"
+                    }
+                }
+                foreach ($unexpectedOption in $helpCase.Absent) {
+                    if ($commandHelpOutput.Contains($unexpectedOption)) {
+                        throw "Packaged $commandName $helpFlag contains another command's option: $unexpectedOption"
+                    }
+                }
+                $afterCommandHelp = @($commandHelpMutationRoots | ForEach-Object {
+                    Get-DisposableTreeSnapshot $_
+                })
+                $commandHelpDifference = @(Compare-Object $beforeCommandHelp $afterCommandHelp)
+                if ($commandHelpDifference.Count -ne 0) {
+                    $differenceText = ($commandHelpDifference | Out-String).Trim()
+                    throw "Packaged $commandName $helpFlag mutated protected profile or authoring state: $differenceText"
+                }
+                if ((Test-Path -LiteralPath $tweakSource) -or (Test-Path -LiteralPath $liveRoot)) {
+                    throw "Packaged $commandName $helpFlag created authoring or live-profile state"
+                }
+            }
+        }
         $helpOutput = (& $command help 2>&1 | Out-String).Trim()
         if ($LASTEXITCODE -ne 0) {
             throw "Packaged help exited with code $LASTEXITCODE`: $helpOutput"
@@ -223,7 +318,6 @@ try {
                 throw "Packaged Doctor is missing check: $requiredCheck"
             }
         }
-        $tweakSource = Join-Path $testRoot 'authoring\package-smoke'
         & $command create-tweak $tweakSource --id com.example.package-smoke --name 'Package Smoke' --repo example/package-smoke --scope both
         if ($LASTEXITCODE -ne 0) { throw 'Packaged create-tweak failed' }
         & $command validate-tweak $tweakSource

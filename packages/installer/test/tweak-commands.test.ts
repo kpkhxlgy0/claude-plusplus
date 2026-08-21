@@ -1031,6 +1031,25 @@ test("dev source watcher errors reject after canceling and unregistering owned l
   });
 });
 
+test("dev source watcher rejects an error event whose payload is undefined", async () => {
+  await withDevFixture(async ({ source, paths }) => {
+    const fixture = fakeDevSourceWatcher();
+    const watching = watchTweakProject(source, paths, fixture.dependencies);
+    fixture.sourceListener?.("change", "index.js");
+    const pending = fixture.scheduled[0]!;
+
+    fixture.errorListener?.(undefined);
+
+    await assert.rejects(watching, /Tweak source watcher failed: undefined/);
+    assert.equal(pending.cancelled, true);
+    assert.equal(fixture.watcherCloses, 1);
+    assert.deepEqual(fixture.offSignals, ["SIGINT", "SIGTERM"]);
+    assert.deepEqual(fixture.signalListenerMatches, [true, true]);
+    assert.equal(fixture.signalListeners.size, 0);
+    assert.equal(fixture.markerWrites, 0);
+  });
+});
+
 test("dev source watcher ignores source and timer callbacks after error completion", async () => {
   await withDevFixture(async ({ source, paths }) => {
     const fixture = fakeDevSourceWatcher();

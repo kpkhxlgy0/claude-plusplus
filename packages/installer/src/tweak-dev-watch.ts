@@ -110,8 +110,9 @@ export async function watchTweakProject(
   const watcher = watchFactory(sourceDir, { recursive: true }, sourceListener);
 
   return new Promise<void>((resolvePromise, rejectPromise) => {
-    const stop = (): void => finish();
-    const finish = (error?: unknown): void => {
+    type FinishReason = { kind: "signal" } | { kind: "watcher-error"; error: unknown };
+    const stop = (): void => finish({ kind: "signal" });
+    const finish = (reason: FinishReason): void => {
       if (finished) return;
       finished = true;
       generation += 1;
@@ -122,16 +123,16 @@ export async function watchTweakProject(
       watcher.close();
       offSignal("SIGINT", stop);
       offSignal("SIGTERM", stop);
-      if (error === undefined) {
+      if (reason.kind === "signal") {
         resolvePromise();
       } else {
-        rejectPromise(new Error(`Tweak source watcher failed: ${errorMessage(error)}`));
+        rejectPromise(new Error(`Tweak source watcher failed: ${errorMessage(reason.error)}`));
       }
     };
 
     onSignal("SIGINT", stop);
     onSignal("SIGTERM", stop);
-    watcher.on("error", (error) => finish(error));
+    watcher.on("error", (error) => finish({ kind: "watcher-error", error }));
   });
 }
 

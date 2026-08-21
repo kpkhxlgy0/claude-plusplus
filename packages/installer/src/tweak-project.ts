@@ -114,7 +114,13 @@ function resolveTweakEntry(
   sourceDir: string,
   manifest: TweakManifest,
 ): TweakEntryResolution {
-  const canonicalSourceDir = realpathSync(sourceDir);
+  let canonicalSourceDir: string;
+  try {
+    canonicalSourceDir = realpathSync(sourceDir);
+  } catch (error) {
+    if (isMissingPathError(error)) return { status: "missing" };
+    throw error;
+  }
   if (manifest.main) {
     if (
       isAbsolute(manifest.main) ||

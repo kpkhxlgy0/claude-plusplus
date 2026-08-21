@@ -28,7 +28,7 @@ test("create parser defaults force and omits unspecified values", () => {
 });
 
 test("create parser rejects unknown options", () => {
-  for (const option of ["--unknown", "-x"]) {
+  for (const option of ["--unknown", "-x", "-h", "--help"]) {
     assert.throws(
       () => parseCreateTweakArguments(["project", option]),
       new Error(`unknown option: ${option}`),
@@ -103,7 +103,7 @@ test("validate and dev parsers apply their defaults", () => {
 });
 
 test("validate parser rejects unknown options and extra positionals", () => {
-  for (const option of ["--unknown", "-x"]) {
+  for (const option of ["--unknown", "-x", "-h", "--help"]) {
     assert.throws(
       () => parseValidateTweakArguments([option]),
       new Error(`unknown option: ${option}`),
@@ -117,7 +117,7 @@ test("validate parser rejects unknown options and extra positionals", () => {
 });
 
 test("dev parser rejects unknown options and extra positionals", () => {
-  for (const option of ["--unknown", "-x"]) {
+  for (const option of ["--unknown", "-x", "-h", "--help"]) {
     assert.throws(
       () => parseDevTweakArguments([option]),
       new Error(`unknown option: ${option}`),
