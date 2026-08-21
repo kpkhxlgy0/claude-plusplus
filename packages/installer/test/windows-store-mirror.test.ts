@@ -108,6 +108,33 @@ test("failed force refresh restores the current mirror", async () => {
   }
 });
 
+test("failed force refresh before moving the target leaves the current mirror intact", async () => {
+  const fixture = createFixture();
+  try {
+    const first = await ensureWindowsStoreMirror(fixture.install, fixture.paths);
+    writeFileSync(join(first.appRoot, "sentinel.txt"), "old");
+    writeFileSync(join(fixture.source, "sentinel.txt"), "new");
+    const fileSystem: MirrorFileSystem = {
+      forceRefresh: true,
+      rename: async (source, target) => {
+        if (source === first.appRoot && target.includes(".backup-")) {
+          throw new Error("simulated target-to-backup failure");
+        }
+        renameSync(source, target);
+      },
+    };
+
+    await assert.rejects(
+      ensureWindowsStoreMirror(fixture.install, fixture.paths, fileSystem),
+      /simulated target-to-backup failure/,
+    );
+    assert.equal(readFileSync(join(first.appRoot, "sentinel.txt"), "utf8"), "old");
+    assert.equal(readFileSync(join(first.appRoot, "claude.exe"), "utf8"), "official-exe");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("rejects a managed target outside the Claude++ store-apps root", () => {
   const fixture = createFixture();
   try {

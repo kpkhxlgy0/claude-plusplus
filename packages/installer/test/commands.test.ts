@@ -81,6 +81,40 @@ test("installs a real managed mirror, Loader, Runtime, state, and shortcut idemp
   }
 });
 
+test("trusted schema 2 non-current maintenance preserves its mirror and original ASAR hash", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const state = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(state?.schemaVersion === 2);
+    const originalAsarHash = state.originalAsarHash;
+    writeFileSync(join(state.managedAppRoot, "managed-only.txt"), "keep");
+    writeFileSync(join(fixture.install.appRoot, "late-official.txt"), "do-not-copy");
+    rmSync(join(fixture.paths.runtime, "main.js"), { force: true });
+    writeFileSync(
+      join(fixture.options.sourceRoot, "packages", "runtime", "dist", "main.js"),
+      "module.exports = { maintained: true };\n",
+    );
+
+    const result = await installClaudePlusPlus(fixture.options, fixture.deps);
+    const maintained = readClaudePlusPlusState(fixture.paths.stateFile);
+
+    assert.equal(result.status, "installed");
+    assert.ok(maintained?.schemaVersion === 2);
+    assert.equal(maintained.originalAsarHash, originalAsarHash);
+    assert.equal(readAsarHeaderHash(maintained.asarPath), maintained.patchedAsarHash);
+    assert.equal(inspectClaudePlusPlusLoader(maintained.asarPath)?.metadata.loaderVersion, "0.2.9");
+    assert.equal(
+      readFileSync(join(fixture.paths.runtime, "main.js"), "utf8"),
+      "module.exports = { maintained: true };\n",
+    );
+    assert.equal(readFileSync(join(state.managedAppRoot, "managed-only.txt"), "utf8"), "keep");
+    assert.equal(existsSync(join(state.managedAppRoot, "late-official.txt")), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("maintenance rebuilds a legacy reused mirror before migrating to schema 2", async () => {
   const fixture = await createFixture();
   try {
@@ -123,10 +157,17 @@ for (const scenario of [
     mutate: async (fixture, _state) => writeFileSync(fixture.paths.stateFile, "{ malformed"),
   },
   {
-    name: "mismatched schema 2 package identity",
+    name: "mismatched schema 2 package version",
     mutate: async (fixture, state) => writeFileSync(
       fixture.paths.stateFile,
       JSON.stringify({ ...state, packageVersion: "9.9.9.9" }),
+    ),
+  },
+  {
+    name: "mismatched schema 2 package full name",
+    mutate: async (fixture, state) => writeFileSync(
+      fixture.paths.stateFile,
+      JSON.stringify({ ...state, packageFullName: "Claude_other_x64__test" }),
     ),
   },
 ] satisfies Array<{
@@ -182,6 +223,39 @@ test("failed forced install refresh restores the mirror and preserves state byte
         { ...fixture.deps, mirrorFileSystem },
       ),
       /simulated install refresh failure/,
+    );
+    assert.deepEqual(readFileSync(fixture.paths.stateFile), stateBefore);
+    assert.equal(readFileSync(join(state.managedAppRoot, "sentinel.txt"), "utf8"), "old");
+    assert.equal(readAsarHeaderHash(state.asarPath), state.patchedAsarHash);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("failed forced install refresh before moving the target preserves mirror and state bytes", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const state = readClaudePlusPlusState(fixture.paths.stateFile);
+    assert.ok(state?.schemaVersion === 2);
+    const stateBefore = readFileSync(fixture.paths.stateFile);
+    writeFileSync(join(state.managedAppRoot, "sentinel.txt"), "old");
+    writeFileSync(join(fixture.install.appRoot, "sentinel.txt"), "new");
+    const mirrorFileSystem: MirrorFileSystem = {
+      rename: async (source, target) => {
+        if (source === state.managedAppRoot && target.includes(".backup-")) {
+          throw new Error("simulated install target-to-backup failure");
+        }
+        renameSync(source, target);
+      },
+    };
+
+    await assert.rejects(
+      installClaudePlusPlus(
+        { ...fixture.options, force: true },
+        { ...fixture.deps, mirrorFileSystem },
+      ),
+      /simulated install target-to-backup failure/,
     );
     assert.deepEqual(readFileSync(fixture.paths.stateFile), stateBefore);
     assert.equal(readFileSync(join(state.managedAppRoot, "sentinel.txt"), "utf8"), "old");
