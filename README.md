@@ -64,6 +64,32 @@ distributed and installed separately. Start with the [Tweak author workflow](doc
 [advanced Claude capability guide](docs/tweak-authoring.md) covers startup environment, exact-path Claude Code
 settings, in-process MCP, and session titles.
 
+### Review-only update indicators
+
+Claude++ starts a product metadata check when the `CLAUDE++` navigation group mounts or remounts and that mount is
+visually eligible. A hidden mount defers the check until that mounted group first becomes visually visible. The
+reviewed Store has a separate trigger: it warms on each visual false-to-true Settings transition. For an initially
+visible Settings shell, both requests start before injector setup returns, after navigation is attached; navigation
+waits for neither request.
+
+When a newer Claude++ release is available, the `CLAUDE++` heading shows an `Update` review action. It opens the
+current GitHub release URL, or the official
+[`kpkhxlgy0/claude-plusplus` releases page](https://github.com/kpkhxlgy0/claude-plusplus/releases) when the result has
+no release URL. Stable and Prerelease checks use `kpkhxlgy0/claude-plusplus`; Custom uses its saved repository. The
+`Tweak Store` item shows the count of installed-version mismatches against the reviewed registry. Store memory
+survives reopening Settings until manual `Refresh`, a successful Store installation, or Renderer restart.
+
+Automatic checks download JSON metadata only. They never download a release archive or executable, install an
+update, enable Watcher, or change automatic-refresh or other Settings state. Config's explicit `Check Now` publishes
+through the same controller-owned product state as the automatic check and uses the same validity-aware advisory
+writer, so it does not replace a present malformed, non-object, or unreadable config merely to cache a result. The
+separate opt-in maintenance policy above remains unchanged.
+
+The automatic Store warm attaches only a success continuation and has no local rejection handler, matching Codex++.
+An explicit Store-page render catches a load failure, clears the Store badge, and renders the page's error and
+`Refresh` state. The product `Update` click is likewise fire-and-forget with no local rejection handler; the automatic
+product-check IPC does catch rejection and hides the action.
+
 ## Installation boundary
 
 Claude++ creates and patches only a managed mirror of the official Claude app. It does not modify WindowsApps or the

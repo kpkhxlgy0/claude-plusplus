@@ -15,8 +15,22 @@ Before tagging or submitting a Tweak:
 7. Test on a clean profile or disposable project copy, then fully restart Claude for Renderer/startup behavior that
    cannot be proven by hot reload alone.
 
-GitHub Releases are advisory: Claude++ checks the repository's latest non-draft release at most once per 24 hours,
-compares the tag with `manifest.version`, and shows update information. It does not install arbitrary release assets.
+GitHub Releases are advisory: Claude++ compares the repository's latest non-draft release with the installed manifest
+version and shows a GitHub review link, not an installer. Automatic checks download JSON metadata only and never
+install arbitrary release assets.
+
+The persistent cache is accepted only when its manifest id slot, repository, and installed version match and the
+result is younger than 24 hours. The full in-flight identity is absolute config path plus manifest id, repository, and
+installed version. Overlapping same-identity calls in one Runtime process share only their in-flight promise; the
+promise is removed after settlement. This is not an absolute once-per-24-hours request limit: a separate process, a
+later sequential call without a matching persisted result, or invalid, unreadable, or unwritable config can request
+metadata again.
+
+Each advisory completion re-reads and merges the latest valid config at commit time. Distinct product and Tweak slots,
+and intervening valid in-process config changes, therefore survive parallel completions. Different identities for the
+same manifest id do not share an in-flight promise, but they write the same id-keyed slot and deliberately retain
+one-slot last-completion behavior. A later caller validates repository and installed version before reusing that slot,
+so a different-identity result is not a matching cache hit.
 
 ## Reviewed Tweak Store commits
 

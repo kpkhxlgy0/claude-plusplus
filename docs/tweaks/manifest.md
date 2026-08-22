@@ -100,8 +100,16 @@ Declare only capabilities the Tweak actually uses.
 Runtime skips a Tweak when its current version is lower than numeric `minRuntime`. Set `minRuntime` to the first
 Claude++ version that provides every API or private compatibility boundary the Tweak needs.
 
-`githubRepo` drives advisory GitHub release checks. Claude++ compares the installed manifest version with the latest
-non-draft release tag at most once per 24 hours and shows update information; it does not install arbitrary releases.
+`githubRepo` drives advisory GitHub release checks. During an installed catalog request, every row whose entry exists
+is automatically checked, including disabled and runtime-incompatible rows; neither enabled state nor `minRuntime`
+compatibility filters the request. A missing-entry diagnostic row starts no request. It can display cached data only
+when the cached repository and installed version both match its current manifest.
+
+The check identity is the absolute config path plus manifest id, `githubRepo`, and installed manifest version. A
+matching persistent result younger than 24 hours is reused, and overlapping calls for that exact identity share one
+process-local in-flight promise. Repository, installed-version, or config-path changes create a different identity.
+Automatic checks download JSON metadata only. The result is a GitHub release-review link, not an installer, and
+Claude++ does not install arbitrary release assets.
 
 The reviewed Tweak Store keeps review data outside `manifest.json`. A Store registry entry repeats the validated
 manifest, matches its `githubRepo`, and pins `approvedCommitSha` to the exact reviewed 40-character commit. Reviewers

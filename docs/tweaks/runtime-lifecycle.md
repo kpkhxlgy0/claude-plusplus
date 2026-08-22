@@ -20,6 +20,20 @@ Renderer source is evaluated in the preload with `module`, `exports`, `console`,
 argument is explicitly `undefined`; bundle all Renderer dependencies. Settings registrations are tracked as part of
 the Renderer lease.
 
+### Renderer catalog release checks
+
+After installed-Tweak discovery and before returning the Renderer catalog response, Runtime starts an advisory GitHub
+release check for every entry-present row. The checks run in parallel, but the catalog awaits all of them. A stale or
+missing cache can therefore delay initial Renderer Tweak startup or Renderer hot reconstruction by the slowest GitHub
+request, bounded by the request timeout at roughly 8 seconds rather than 8 seconds per Tweak. Main Tweak startup and
+the watcher debounce are unchanged.
+
+During hot reconstruction, the old Renderer lifecycle has already stopped and Settings registrations have been
+cleared before this awaited catalog request, so Renderer Tweak UI can remain absent for the same delay. Each completed
+result is attached directly to the current catalog response even when validity-aware persistence is refused or its
+write fails. Network and persistence failures remain advisory and do not reject the catalog or prevent later Renderer
+Tweaks from starting.
+
 ## Stop and lease revocation
 
 Export an idempotent cleanup hook:

@@ -5,6 +5,29 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.3.1
+
+Draft release notes: [docs/releases/0.3.1.md](docs/releases/0.3.1.md)
+
+### Added
+
+- Added a visible Claude++ release-review action and a proactive mismatch badge for the reviewed Tweak Store.
+
+### Changed
+
+- Entry-present installed-Tweak catalog checks now run in parallel and are awaited, with exact-identity in-flight
+  sharing and current-batch results attached to the catalog response.
+
+### Fixed
+
+- Automatic and forced advisory writes preserve present malformed, non-object, and unreadable config while containing
+  write failure so completed metadata remains available to the current caller.
+
+### Security
+
+- Automatic checks download JSON metadata only and never enter release-archive, executable, install, Watcher, or
+  Settings mutation paths.
+
 ## 0.3.0
 
 Release notes: [docs/releases/0.3.0.md](docs/releases/0.3.0.md)
