@@ -44,12 +44,31 @@ export interface RuntimeConfig extends Record<string, unknown> {
   tweakUpdateChecks: Record<string, TweakUpdateCheck>;
 }
 
+export type AdvisoryCacheWriteResult =
+  | { status: "persisted" }
+  | { status: "refused-invalid" }
+  | { status: "write-failed"; error: string };
+
+export interface AdvisoryConfigIo {
+  readText(path: string): string;
+  writeAtomic(path: string, config: RuntimeConfig): void;
+}
+
+export interface AdvisoryConfigMutationOptions {
+  io?: AdvisoryConfigIo;
+}
+
 const defaultClaudePlusPlusConfig: ClaudePlusPlusConfig = {
   safeMode: false,
   autoUpdate: false,
   updateChannel: "stable",
   updateRepo: "kpkhxlgy0/claude-plusplus",
   updateRef: "",
+};
+
+const defaultAdvisoryConfigIo: AdvisoryConfigIo = {
+  readText: (path) => readFileSync(path, "utf8"),
+  writeAtomic: (path, config) => writeRuntimeConfigAtomic(path, config),
 };
 
 export function readRuntimeConfig(path: string): RuntimeConfig {
@@ -59,6 +78,36 @@ export function readRuntimeConfig(path: string): RuntimeConfig {
     if (isRecord(parsed)) raw = parsed;
   } catch {}
 
+  return normalizeRuntimeConfig(raw);
+}
+
+export function mutateRuntimeConfigAdvisory(
+  path: string,
+  mutate: (config: RuntimeConfig) => void,
+  options: AdvisoryConfigMutationOptions = {},
+): AdvisoryCacheWriteResult {
+  const io = options.io ?? defaultAdvisoryConfigIo;
+  let raw: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(io.readText(path)) as unknown;
+    if (!isRecord(parsed)) return { status: "refused-invalid" };
+    raw = parsed;
+  } catch (error) {
+    if (!isMissingFileError(error)) return { status: "refused-invalid" };
+    raw = {};
+  }
+
+  const config = normalizeRuntimeConfig(raw);
+  mutate(config);
+  try {
+    io.writeAtomic(path, config);
+    return { status: "persisted" };
+  } catch (error) {
+    return { status: "write-failed", error: errorMessage(error) };
+  }
+}
+
+function normalizeRuntimeConfig(raw: Record<string, unknown>): RuntimeConfig {
   const claudePlusPlus = isRecord(raw.claudePlusPlus) ? raw.claudePlusPlus : {};
   const tweaks = isRecord(raw.tweaks) ? raw.tweaks : {};
   const tweakUpdateChecks = isRecord(raw.tweakUpdateChecks) ? raw.tweakUpdateChecks : {};
@@ -160,4 +209,12 @@ function isClaudePlusPlusUpdateCheck(value: unknown): value is ClaudePlusPlusUpd
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return isRecord(error) && error.code === "ENOENT";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
