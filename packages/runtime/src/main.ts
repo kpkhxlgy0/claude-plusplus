@@ -24,6 +24,7 @@ import {
   type ClaudeSessionTitlesApiLease,
 } from "./claude-desktop-mcp-service.js";
 import type { TweakMcpApiLease } from "./tweak-mcp-registry.js";
+import type { TweakUpdateChecker } from "./tweak-update.js";
 
 export type RuntimeDesktopMcpService = Pick<
   ClaudeDesktopMcpService,
@@ -38,6 +39,7 @@ export interface RuntimeBootstrapDeps {
   startupEnvironment: StartupEnvironmentService;
   claudeCodeSettings: ClaudeCodeSettingsService;
   desktopMcpService: RuntimeDesktopMcpService;
+  tweakUpdateChecker?: TweakUpdateChecker;
 }
 
 export interface RuntimeModuleInitializerDeps {
@@ -47,6 +49,7 @@ export interface RuntimeModuleInitializerDeps {
   startupEnvironment: StartupEnvironmentService;
   claudeCodeSettings: ClaudeCodeSettingsService;
   log?: TweakLogger;
+  tweakUpdateChecker?: TweakUpdateChecker;
   createDesktopMcpService?: () => RuntimeDesktopMcpService;
   bootstrap?: (deps: RuntimeBootstrapDeps) => Promise<void>;
 }
@@ -78,6 +81,7 @@ export function initializeRuntimeModule(deps: RuntimeModuleInitializerDeps): voi
     startupEnvironment: deps.startupEnvironment,
     claudeCodeSettings: deps.claudeCodeSettings,
     desktopMcpService,
+    tweakUpdateChecker: deps.tweakUpdateChecker,
   }).catch((error) => {
     log.error(`[bootstrap] ${errorMessage(error)}`);
   });
@@ -143,6 +147,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
     configFile: join(deps.userRoot, "config.json"),
     sourceRoot: deps.sourceRoot ?? defaultSourceRoot(deps.userRoot),
     log: createLogger(join(logs, "renderer.log")),
+    tweakUpdateChecker: deps.tweakUpdateChecker,
     reloadTweaks: (reason) => manager.reload(reason),
   });
   const registeredSessions = new WeakSet<Electron.Session>();

@@ -14,13 +14,20 @@ import type { TweakManifest, TweakMcpServer } from "@claude-plusplus/sdk";
 import { bootstrapRuntime, initializeRuntimeModule } from "../src/main.ts";
 import { initializeStartupEnvironment } from "../src/startup-environment.ts";
 import { initializeClaudeCodeSettings } from "../src/claude-code-settings.ts";
+import type { TweakUpdateChecker } from "../src/tweak-update.ts";
 
 test("Runtime initializer installs the Desktop observer synchronously before yielding to Claude", () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-early-mcp-"));
   try {
     const calls: string[] = [];
     const desktopMcpService = new FakeDesktopMcpService(calls);
+    const tweakUpdateChecker: TweakUpdateChecker = {
+      async ensure() {
+        throw new Error("initializer identity fixture must not perform a release check");
+      },
+    };
     let bootstrapService: FakeDesktopMcpService | undefined;
+    let bootstrapChecker: TweakUpdateChecker | undefined;
 
     initializeRuntimeModule({
       electron: fakeElectron(fakeSession()),
@@ -28,16 +35,19 @@ test("Runtime initializer installs the Desktop observer synchronously before yie
       runtimeRoot: "C:\\runtime",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
+      tweakUpdateChecker,
       createDesktopMcpService: () => desktopMcpService,
       bootstrap: async (deps) => {
         calls.push("bootstrap");
         bootstrapService = deps.desktopMcpService as FakeDesktopMcpService;
+        bootstrapChecker = deps.tweakUpdateChecker;
       },
     });
     calls.push("original-entry");
 
     assert.deepEqual(calls, ["install-early", "bootstrap", "original-entry"]);
     assert.equal(bootstrapService, desktopMcpService);
+    assert.equal(bootstrapChecker, tweakUpdateChecker);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -423,6 +433,7 @@ test("serves the full Tweak catalog and validated Renderer source through separa
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
       desktopMcpService: new FakeDesktopMcpService(),
+      tweakUpdateChecker: fakeTweakUpdateChecker(),
     });
     const catalog = await handlers.get("claudepp:list-tweaks")?.({}) as Array<{
       manifest: { id: string };
@@ -939,6 +950,7 @@ test("Safe Mode cold start keeps management IPC but registers no Renderer preloa
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
       desktopMcpService,
+      tweakUpdateChecker: fakeTweakUpdateChecker(),
     });
     assert.ok(sessionCreated);
     sessionCreated?.(fakeSession(
@@ -977,6 +989,22 @@ function mainManifest(id: string): TweakManifest {
     version: "0.2.0",
     githubRepo: "example/runtime-mcp",
     scope: "main",
+  };
+}
+
+function fakeTweakUpdateChecker(): TweakUpdateChecker {
+  return {
+    async ensure({ manifest }) {
+      return {
+        checkedAt: "2026-08-22T00:00:00.000Z",
+        repo: manifest.githubRepo,
+        currentVersion: manifest.version,
+        latestVersion: null,
+        latestTag: null,
+        releaseUrl: null,
+        updateAvailable: false,
+      };
+    },
   };
 }
 

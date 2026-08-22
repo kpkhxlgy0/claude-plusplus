@@ -6,6 +6,7 @@ import {
   mutateRuntimeConfig,
   readRuntimeConfig,
   setTweakEnabled,
+  type TweakUpdateCheck,
   type UpdateChannel,
 } from "./config.js";
 import { discoverTweaks } from "./tweak-discovery.js";
@@ -22,6 +23,11 @@ import {
   getUpdateConfigView,
   runClaudePlusPlusUpdate,
 } from "./update-service.js";
+import {
+  createTweakUpdateChecker,
+  tweakUpdateIdentity,
+  type TweakUpdateChecker,
+} from "./tweak-update.js";
 import { getWatcherHealth } from "./watcher-health.js";
 
 export interface ManagementIpcDeps {
@@ -31,6 +37,7 @@ export interface ManagementIpcDeps {
   configFile: string;
   sourceRoot: string;
   log: TweakLogger;
+  tweakUpdateChecker?: TweakUpdateChecker;
   reloadTweaks(reason: string): Promise<void>;
 }
 
@@ -49,12 +56,32 @@ export function installManagementIpc(deps: ManagementIpcDeps): () => void {
     config: readRuntimeConfig(deps.configFile),
     onIssue: (message) => deps.log.warn(message),
   });
+  const tweakUpdateChecker = deps.tweakUpdateChecker ?? createTweakUpdateChecker({
+    onIssue: (message) => deps.log.warn(message),
+  });
   const register = (channel: string, handler: IpcHandler): void => {
     deps.electron.ipcMain.handle(channel, handler);
     channels.push(channel);
   };
 
-  register("claudepp:list-tweaks", () => listTweaks());
+  register("claudepp:list-tweaks", async () => {
+    const snapshot = listTweaks();
+    const fresh = new Map<string, TweakUpdateCheck>();
+    await Promise.all(snapshot
+      .filter((item) => item.entryExists)
+      .map(async (item) => {
+        const check = await tweakUpdateChecker.ensure({
+          configFile: deps.configFile,
+          manifest: item.manifest,
+        });
+        fresh.set(tweakUpdateIdentity(deps.configFile, item.manifest), check);
+      }));
+
+    return snapshot.map((item) => {
+      const update = fresh.get(tweakUpdateIdentity(deps.configFile, item.manifest));
+      return update ? { ...item, update } : item;
+    });
+  });
   register("claudepp:user-paths", () => ({
     userRoot: deps.userRoot,
     runtimeDir: process.env.CLAUDE_PLUSPLUS_RUNTIME ?? "",
@@ -148,7 +175,11 @@ export function installManagementIpc(deps: ManagementIpcDeps): () => void {
   });
   register("claudepp:check-claudepp-update", (_event, force) => {
     if (force !== undefined && typeof force !== "boolean") throw new Error("Update check request is invalid");
-    return checkClaudePlusPlusUpdate({ ...updatePaths, force: force === true });
+    return checkClaudePlusPlusUpdate({
+      ...updatePaths,
+      force: force === true,
+      onIssue: (message) => deps.log.warn(message),
+    });
   });
   register("claudepp:run-claudepp-update", () => runClaudePlusPlusUpdate(updatePaths));
   register("claudepp:get-watcher-health", () => getWatcherHealth(deps.userRoot));
