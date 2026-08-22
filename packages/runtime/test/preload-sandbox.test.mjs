@@ -26,15 +26,25 @@ test("built Renderer preload boots when the sandbox only exposes Electron", asyn
     }
     disconnect() {}
   }
+  class ResizeObserver {
+    observe() {}
+    disconnect() {}
+  }
+  const documentElement = {
+    isConnected: true,
+    contains(candidate) { return candidate?.isConnected === true; },
+    getBoundingClientRect() { return { width: 800, height: 600 }; },
+  };
   const document = {
     readyState: "complete",
-    documentElement: {},
+    documentElement,
     addEventListener() {},
     removeEventListener() {},
     querySelectorAll() { return []; },
   };
   const window = {
     addEventListener() {},
+    removeEventListener() {},
   };
   const context = vm.createContext({
     console,
@@ -43,6 +53,7 @@ test("built Renderer preload boots when the sandbox only exposes Electron", asyn
     location: { href: "file:///claude/index.html" },
     module: { exports: {} },
     MutationObserver,
+    ResizeObserver,
     process: { versions: { electron: "41.3.0" } },
     queueMicrotask,
     require(specifier) {
@@ -52,6 +63,7 @@ test("built Renderer preload boots when the sandbox only exposes Electron", asyn
     setTimeout,
     URL,
     window,
+    getComputedStyle() { return { display: "block", visibility: "visible" }; },
   });
 
   new vm.Script(source, { filename: "claude-plusplus-preload.js" }).runInContext(context);

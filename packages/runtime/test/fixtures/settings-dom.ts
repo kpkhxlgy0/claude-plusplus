@@ -7,7 +7,6 @@ export class MiniElement {
   public readonly style: Record<string, string> = { display: "" };
   public parentElement: MiniElement | null = null;
   public ownerDocument: MiniDocument | null = null;
-  public className = "";
   public disabled = false;
   public hidden = false;
   public innerHTML = "";
@@ -18,9 +17,23 @@ export class MiniElement {
   public value = "";
   private readonly attributes = new Map<string, string>();
   private readonly listeners = new Map<string, Set<(event: MiniEvent) => void>>();
+  private currentClassName = "";
 
   public constructor(tagName: string) {
     this.tagName = tagName.toUpperCase();
+  }
+
+  public get className(): string {
+    return this.currentClassName;
+  }
+
+  public set className(value: string) {
+    this.currentClassName = value;
+    this.ownerDocument?.notifyAttributeMutation(this, "class");
+  }
+
+  public get isConnected(): boolean {
+    return this.ownerDocument?.documentElement.contains(this) ?? false;
   }
 
   public get textContent(): string {
@@ -69,6 +82,7 @@ export class MiniElement {
 
   public setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
+    this.ownerDocument?.notifyAttributeMutation(this, name);
   }
 
   public getAttribute(name: string): string | null {
@@ -77,6 +91,7 @@ export class MiniElement {
 
   public removeAttribute(name: string): void {
     this.attributes.delete(name);
+    this.ownerDocument?.notifyAttributeMutation(this, name);
   }
 
   public hasAttribute(name: string): boolean {
@@ -145,21 +160,137 @@ class MiniDocument extends MiniElement {
     element.ownerDocument = this;
     return element;
   }
+
+  public notifyAttributeMutation(target: MiniElement, attributeName: string): void {
+    MiniMutationObserver.queueAttributeMutation(target, attributeName);
+  }
 }
 
 class MiniMutationObserver {
-  public static callbacks: Array<() => void> = [];
+  public static instances: MiniMutationObserver[] = [];
+  private static readonly queued = new Set<MiniMutationObserver>();
+  private observing = false;
+  private target: MiniElement | null = null;
+  private options: MutationObserverInit | null = null;
 
-  public constructor(callback: () => void) {
-    MiniMutationObserver.callbacks.push(callback);
+  public constructor(private readonly callback: () => void) {
+    MiniMutationObserver.instances.push(this);
   }
 
-  public observe(): void {}
-  public disconnect(): void {}
+  public observe(target: MiniElement, options: MutationObserverInit): void {
+    this.observing = true;
+    this.target = target;
+    this.options = options;
+  }
+
+  public disconnect(): void {
+    this.observing = false;
+    MiniMutationObserver.queued.delete(this);
+  }
+
+  public static reset(): void {
+    MiniMutationObserver.instances = [];
+    MiniMutationObserver.queued.clear();
+  }
+
+  public static flush(): void {
+    for (const instance of MiniMutationObserver.instances) {
+      if (instance.observing) instance.callback();
+    }
+  }
+
+  public static discardQueued(): void {
+    MiniMutationObserver.queued.clear();
+  }
+
+  public static drainQueued(limit: number): { turns: number; pending: boolean } {
+    let turns = 0;
+    while (MiniMutationObserver.queued.size > 0 && turns < limit) {
+      const queued = [...MiniMutationObserver.queued];
+      MiniMutationObserver.queued.clear();
+      for (const instance of queued) {
+        if (instance.observing) instance.callback();
+      }
+      turns += 1;
+    }
+    return { turns, pending: MiniMutationObserver.queued.size > 0 };
+  }
+
+  public static queueAttributeMutation(target: MiniElement, attributeName: string): void {
+    for (const instance of MiniMutationObserver.instances) {
+      const options = instance.options;
+      const observedTarget = instance.target;
+      if (!instance.observing || !options?.attributes || !observedTarget) continue;
+      if (options.attributeFilter && !options.attributeFilter.includes(attributeName)) continue;
+      if (target !== observedTarget && (!options.subtree || !observedTarget.contains(target))) continue;
+      MiniMutationObserver.queued.add(instance);
+    }
+  }
+
+  public get observedOptions(): MutationObserverInit | null {
+    return this.options;
+  }
+
+  public get isObserving(): boolean {
+    return this.observing;
+  }
 }
 
-export function settingsFixture() {
-  MiniMutationObserver.callbacks = [];
+class MiniResizeObserver {
+  public static instances: MiniResizeObserver[] = [];
+  private observing = false;
+
+  public constructor(private readonly callback: () => void) {
+    MiniResizeObserver.instances.push(this);
+  }
+
+  public observe(): void {
+    this.observing = true;
+  }
+
+  public disconnect(): void {
+    this.observing = false;
+  }
+
+  public static reset(): void {
+    MiniResizeObserver.instances = [];
+  }
+
+  public static flush(): void {
+    for (const instance of MiniResizeObserver.instances) {
+      if (instance.observing) instance.callback();
+    }
+  }
+
+  public get isObserving(): boolean {
+    return this.observing;
+  }
+}
+
+const windowListeners = new Map<string, Set<() => void>>();
+
+const windowEvents = {
+  addEventListener(type: string, listener: () => void) {
+    const listeners = windowListeners.get(type) ?? new Set();
+    listeners.add(listener);
+    windowListeners.set(type, listeners);
+  },
+  removeEventListener(type: string, listener: () => void) {
+    windowListeners.get(type)?.delete(listener);
+  },
+};
+
+interface SettingsFixtureOptions {
+  display?: string;
+  visibility?: string;
+  width?: number;
+  height?: number;
+}
+
+export function settingsFixture(options: SettingsFixtureOptions = {}) {
+  MiniMutationObserver.reset();
+  MiniResizeObserver.reset();
+  windowListeners.clear();
   const document = new MiniDocument();
   let dialog: MiniElement;
   let nav: MiniElement;
@@ -168,6 +299,10 @@ export function settingsFixture() {
   let content: MiniElement;
   let nativeHeader: MiniElement;
   let nativeBody: MiniElement;
+  let dialogDisplay = options.display ?? "block";
+  let dialogVisibility = options.visibility ?? "visible";
+  let dialogWidth = options.width ?? 800;
+  let dialogHeight = options.height ?? 600;
 
   const mount = (): void => {
     dialog = document.createElement("div");
@@ -219,6 +354,16 @@ export function settingsFixture() {
     environment: {
       document: document as unknown as Document,
       MutationObserver: MiniMutationObserver as unknown as typeof MutationObserver,
+      ResizeObserver: MiniResizeObserver as unknown as typeof ResizeObserver,
+      getComputedStyle: (_element: Element) => ({
+        display: dialogDisplay,
+        visibility: dialogVisibility,
+      }),
+      getBoundingClientRect: (_element: Element) => ({
+        width: dialogWidth,
+        height: dialogHeight,
+      }),
+      windowEvents: windowEvents as unknown as Pick<Window, "addEventListener" | "removeEventListener">,
     },
     get content() { return content; },
     get nativeHeader() { return nativeHeader; },
@@ -238,6 +383,12 @@ export function settingsFixture() {
     countPageButtons(id: string): number {
       return document.querySelectorAll(`[data-claudepp-settings-page="${id}"]`).length;
     },
+    groupAction(id: string): MiniElement | null {
+      return document.querySelector(`[data-claudepp-settings-group-action="${id}"]`);
+    },
+    countGroupActions(id: string): number {
+      return document.querySelectorAll(`[data-claudepp-settings-group-action="${id}"]`).length;
+    },
     groupLabels(): string[] {
       return document.querySelectorAll("[data-claudepp-settings-group-label]")
         .map((element) => element.textContent);
@@ -245,12 +396,64 @@ export function settingsFixture() {
     findPanel(): MiniElement | null {
       return document.querySelector("[data-claudepp-settings-panel]");
     },
+    setDialogStyle(next: { display: string; visibility: string }): void {
+      dialogDisplay = next.display;
+      dialogVisibility = next.visibility;
+    },
+    setDialogRect(width: number, height: number): void {
+      dialogWidth = width;
+      dialogHeight = height;
+    },
+    flushAttributeMutation(): void {
+      MiniMutationObserver.flush();
+    },
+    flushResize(): void {
+      MiniResizeObserver.flush();
+    },
+    flushWindowResize(): void {
+      for (const listener of windowListeners.get("resize") ?? []) listener();
+    },
+    flushMutation(): void {
+      MiniMutationObserver.flush();
+    },
+    queueObservedClassMutation(target: MiniElement): void {
+      target.className = target.className;
+    },
+    discardQueuedMutations(): void {
+      MiniMutationObserver.discardQueued();
+    },
+    drainQueuedMutations(limit: number): { turns: number; pending: boolean } {
+      return MiniMutationObserver.drainQueued(limit);
+    },
+    mutationObservation(): MutationObserverInit | null {
+      return MiniMutationObserver.instances[0]?.observedOptions ?? null;
+    },
+    activeMutationObserverCount(): number {
+      return MiniMutationObserver.instances.filter((instance) => instance.isObserving).length;
+    },
+    activeResizeObserverCount(): number {
+      return MiniResizeObserver.instances.filter((instance) => instance.isObserving).length;
+    },
+    windowListenerCount(type: string): number {
+      return windowListeners.get(type)?.size ?? 0;
+    },
+    removeSettingsShell(): void {
+      dialog.remove();
+    },
+    replaceVisibleSettingsShell(): void {
+      dialog.remove();
+      dialogDisplay = "block";
+      dialogVisibility = "visible";
+      dialogWidth = 800;
+      dialogHeight = 600;
+      mount();
+    },
+    removeInjectedSettingsGroups(): void {
+      for (const group of document.querySelectorAll("[data-claudepp-settings-group]")) group.remove();
+    },
     remountSettingsShell(): void {
       dialog.remove();
       mount();
-    },
-    flushMutation(): void {
-      for (const callback of MiniMutationObserver.callbacks) callback();
     },
   };
 }
@@ -275,6 +478,7 @@ function matchesSelector(element: MiniElement, selector: string): boolean {
     "data-claudepp-settings-icon",
     "data-claudepp-settings-group",
     "data-claudepp-settings-group-label",
+    "data-claudepp-settings-group-action",
     "data-claudepp-settings-badge",
   ]) {
     if (selector === `[${attribute}]`) return element.hasAttribute(attribute);

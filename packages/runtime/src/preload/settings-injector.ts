@@ -29,7 +29,14 @@ let managementInvoke: (channel: string, ...args: unknown[]) => Promise<unknown> 
 };
 
 export function startSettingsInjector(
-  nextEnvironment: SettingsInjectorEnvironment = { document, MutationObserver },
+  nextEnvironment: SettingsInjectorEnvironment = {
+    document,
+    MutationObserver,
+    ResizeObserver,
+    getComputedStyle: (element) => getComputedStyle(element),
+    getBoundingClientRect: (element) => element.getBoundingClientRect(),
+    windowEvents: window,
+  },
 ): void {
   if (environment?.document !== nextEnvironment.document) resetEnvironment();
   environment = nextEnvironment;
