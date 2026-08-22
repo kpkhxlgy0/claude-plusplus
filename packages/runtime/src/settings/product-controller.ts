@@ -6,8 +6,10 @@ import type {
 } from "@claude-plusplus/sdk";
 import type {
   SettingsNavigationGroup,
+  SettingsNavigationHeaderAction,
   SettingsShellAdapter,
 } from "../preload/claude-settings-shell-adapter.js";
+import type { ClaudePlusPlusUpdateCheck } from "../config.js";
 import type {
   BuiltInSettingsRoute,
   ListedTweakView,
@@ -37,12 +39,16 @@ interface BuiltInPageDefinition {
   render: SettingsProductPageRenderer;
 }
 
+const CLAUDE_PLUSPLUS_RELEASES_URL =
+  "https://github.com/kpkhxlgy0/claude-plusplus/releases";
+
 export class SettingsProductController {
   private readonly sections = new Map<string, RegisteredSettingsSection>();
   private readonly pages = new Map<string, RegisteredSettingsPage>();
   private listedTweaks: ListedTweakView[] = [];
   private activeId: string | null = null;
   private storeUpdateCount = 0;
+  private productUpdateCheck: ClaudePlusPlusUpdateCheck | null = null;
   private started = false;
 
   public constructor(
@@ -79,6 +85,11 @@ export class SettingsProductController {
     const normalized = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
     if (this.storeUpdateCount === normalized) return;
     this.storeUpdateCount = normalized;
+    this.syncNavigation();
+  }
+
+  public setProductUpdateCheck(check: ClaudePlusPlusUpdateCheck | null): void {
+    this.productUpdateCheck = check;
     this.syncNavigation();
   }
 
@@ -149,6 +160,7 @@ export class SettingsProductController {
     const groups: SettingsNavigationGroup[] = [{
       id: "claudepp",
       title: "CLAUDE++",
+      headerAction: this.productHeaderAction(),
       items: this.builtInPages().map(({ id, title, iconSvg, badge }) => ({
         id,
         title,
@@ -171,6 +183,25 @@ export class SettingsProductController {
       this.activeId = null;
     });
     this.adapter.setActive(this.activeId);
+  }
+
+  private productHeaderAction(): SettingsNavigationHeaderAction | undefined {
+    const check = this.productUpdateCheck;
+    if (!check?.updateAvailable) return undefined;
+    return {
+      id: "claudepp-update",
+      label: "Update",
+      title: check.latestVersion
+        ? `Open Claude++ ${check.latestVersion} update`
+        : "Open Claude++ update",
+      onClick: async () => {
+        const current = this.productUpdateCheck;
+        if (!current?.updateAvailable) return;
+        await this.services.openExternal(
+          current.releaseUrl || CLAUDE_PLUSPLUS_RELEASES_URL,
+        );
+      },
+    };
   }
 
   private builtInPages(): BuiltInPageDefinition[] {
@@ -223,6 +254,7 @@ export class SettingsProductController {
       pages: [...this.pages.values()],
       activate: (id) => this.activate(id),
       setStoreUpdateCount: (count) => this.setStoreUpdateCount(count),
+      setProductUpdateCheck: (check) => this.setProductUpdateCheck(check),
     };
     try {
       return page.render(context);
@@ -246,6 +278,9 @@ export function createLoadingSettingsProductServices(): SettingsProductServices 
     renderConfig: renderLoading,
     renderTweaks: renderLoading,
     renderStore: renderLoading,
+    openExternal: async () => {
+      throw new Error("Claude++ external-open service is unavailable");
+    },
   };
 }
 

@@ -17,12 +17,14 @@ import {
 import { renderTweaksPage } from "../settings/tweaks-page.js";
 import { renderConfigPage } from "../settings/config-page.js";
 import { renderStorePage } from "../settings/store-page.js";
+import type { ClaudePlusPlusUpdateCheck } from "../config.js";
 
 export type SettingsInjectorEnvironment = SettingsShellEnvironment;
 
 let environment: SettingsInjectorEnvironment | null = null;
 let adapter: SettingsShellAdapter | null = null;
 let controller: SettingsProductController | null = null;
+let settingsEnvironmentGeneration = 0;
 let tweaksPath = "<user dir>/tweaks";
 let managementInvoke: (channel: string, ...args: unknown[]) => Promise<unknown> = async () => {
   throw new Error("Claude++ Settings management bridge is unavailable");
@@ -41,13 +43,22 @@ export function startSettingsInjector(
   if (environment?.document !== nextEnvironment.document) resetEnvironment();
   environment = nextEnvironment;
   if (!adapter) {
-    adapter = createClaudeSettingsShellAdapter(nextEnvironment);
+    const generation = settingsEnvironmentGeneration;
+    const localAdapter = createClaudeSettingsShellAdapter(nextEnvironment);
+    adapter = localAdapter;
     const services = createLoadingSettingsProductServices();
-    controller = new SettingsProductController(adapter, {
+    let localController!: SettingsProductController;
+    const isCurrent = (): boolean =>
+      settingsEnvironmentGeneration === generation && controller === localController;
+    const publishProductUpdate = (check: ClaudePlusPlusUpdateCheck | null): void => {
+      if (isCurrent()) localController.setProductUpdateCheck(check);
+    };
+    localController = new SettingsProductController(localAdapter, {
       ...services,
       renderConfig: (context) => mountAsyncPage(renderConfigPage({
         root: context.root,
         invoke: managementInvokeTyped,
+        publishProductUpdate,
       })),
       renderTweaks: (context) => renderTweaksPage({
         ...context,
@@ -64,9 +75,31 @@ export function startSettingsInjector(
           "GitHub repo (owner/repo or URL)",
         ) ?? null,
       })),
+      openExternal: (url) => managementInvoke("claudepp:open-external", url),
     });
+    controller = localController;
+    let productCheckPendingForMount = false;
+    const startProductCheck = (): void => {
+      void managementInvokeTyped<ClaudePlusPlusUpdateCheck>(
+        "claudepp:check-claudepp-update",
+        false,
+      )
+        .then((check) => publishProductUpdate(check))
+        .catch(() => publishProductUpdate(null));
+    };
+    localAdapter.setNavigationMountListener((visible) => {
+      productCheckPendingForMount = !visible;
+      if (visible) startProductCheck();
+    });
+    localController.start();
+    localAdapter.setVisibilityListener((visible) => {
+      if (!visible || !productCheckPendingForMount) return;
+      productCheckPendingForMount = false;
+      startProductCheck();
+    });
+  } else {
+    controller!.start();
   }
-  controller!.start();
 }
 
 export function registerSection(
@@ -105,6 +138,7 @@ export function clearSettings(): void {
 export const clearSettingsPages = clearSettings;
 
 function resetEnvironment(): void {
+  settingsEnvironmentGeneration += 1;
   controller?.clear();
   adapter?.stop();
   controller = null;

@@ -4,6 +4,7 @@ import type {
   SettingsPage,
   TweakManifest,
 } from "@claude-plusplus/sdk";
+import type { ClaudePlusPlusUpdateCheck } from "../src/config.ts";
 import type {
   SettingsNavigationGroup,
   SettingsShellAdapter,
@@ -130,6 +131,80 @@ test("publishes the installed Store update count in navigation", () => {
   assert.equal(adapter.navigation[0]?.items[2]?.badge, "2");
 });
 
+test("publishes one product Update action and removes it for current or failed results", async () => {
+  const fixture = settingsFixture();
+  const adapter = new FakeSettingsShellAdapter(fixture.environment.document);
+  const opened: string[] = [];
+  const controller = new SettingsProductController(adapter, {
+    ...fakeServices(),
+    async openExternal(url) { opened.push(url); },
+  });
+  controller.start();
+
+  controller.setProductUpdateCheck(productCheck({
+    latestVersion: "0.3.1",
+    releaseUrl: "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.1",
+    updateAvailable: true,
+  }));
+  const action = adapter.navigation[0]?.headerAction;
+  assert.equal(action?.label, "Update");
+  assert.match(action?.title ?? "", /0\.3\.1/);
+  await action?.onClick();
+  assert.deepEqual(opened, [
+    "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.1",
+  ]);
+
+  controller.setProductUpdateCheck(productCheck({ releaseUrl: null }));
+  const fallbackAction = adapter.navigation[0]?.headerAction;
+  assert.equal(fallbackAction?.label, "Update");
+  await fallbackAction?.onClick();
+  assert.equal(
+    opened.at(-1),
+    "https://github.com/kpkhxlgy0/claude-plusplus/releases",
+  );
+
+  controller.setProductUpdateCheck(productCheck({
+    latestVersion: "0.3.0",
+    releaseUrl: "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.0",
+    updateAvailable: false,
+  }));
+  assert.equal(adapter.navigation[0]?.headerAction, undefined);
+  controller.setProductUpdateCheck(null);
+  assert.equal(adapter.navigation[0]?.headerAction, undefined);
+});
+
+test("an existing action dereferences the controller's current release URL", async () => {
+  const fixture = settingsFixture();
+  const opened: string[] = [];
+  const adapter = new FakeSettingsShellAdapter(fixture.environment.document);
+  const controller = new SettingsProductController(adapter, {
+    ...fakeServices(),
+    async openExternal(url) { opened.push(url); },
+  });
+  controller.start();
+  controller.setProductUpdateCheck(availableProductCheck("https://github.com/example/first"));
+  const retainedAction = adapter.navigation[0]?.headerAction;
+  controller.setProductUpdateCheck(availableProductCheck("https://github.com/example/current"));
+  await retainedAction?.onClick();
+  assert.deepEqual(opened, ["https://github.com/example/current"]);
+});
+
+test("keeps the Store badge and product header action after either setter synchronizes navigation", () => {
+  const fixture = settingsFixture();
+  const adapter = new FakeSettingsShellAdapter(fixture.environment.document);
+  const controller = new SettingsProductController(adapter, fakeServices());
+  controller.start();
+  controller.setProductUpdateCheck(availableProductCheck());
+
+  controller.setStoreUpdateCount(2);
+  assert.equal(adapter.navigation[0]?.items[2]?.badge, "2");
+  assert.equal(adapter.navigation[0]?.headerAction?.label, "Update");
+
+  controller.setProductUpdateCheck(productCheck({ latestVersion: "0.3.2" }));
+  assert.equal(adapter.navigation[0]?.items[2]?.badge, "2");
+  assert.equal(adapter.navigation[0]?.headerAction?.title, "Open Claude++ 0.3.2 update");
+});
+
 function manifest(id: string): TweakManifest {
   return {
     id,
@@ -169,7 +244,28 @@ function fakeServices(): SettingsProductServices {
     renderConfig: loading,
     renderTweaks: loading,
     renderStore: loading,
+    openExternal: async () => {},
   };
+}
+
+function productCheck(
+  overrides: Partial<ClaudePlusPlusUpdateCheck> = {},
+): ClaudePlusPlusUpdateCheck {
+  return {
+    checkedAt: "2026-08-22T00:00:00.000Z",
+    currentVersion: "0.3.0",
+    latestVersion: "0.3.1",
+    releaseUrl: "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.1",
+    releaseNotes: null,
+    updateAvailable: true,
+    ...overrides,
+  };
+}
+
+function availableProductCheck(
+  releaseUrl = "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.1",
+): ClaudePlusPlusUpdateCheck {
+  return productCheck({ releaseUrl });
 }
 
 class FakeSettingsShellAdapter implements SettingsShellAdapter {
@@ -188,6 +284,10 @@ class FakeSettingsShellAdapter implements SettingsShellAdapter {
   public stop(): void {
     this.restoreNative();
   }
+
+  public setNavigationMountListener(_listener: (visible: boolean) => void): void {}
+
+  public setVisibilityListener(_listener: (visible: boolean) => void): void {}
 
   public setNavigation(
     groups: SettingsNavigationGroup[],

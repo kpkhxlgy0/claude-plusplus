@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TweakManifest } from "@claude-plusplus/sdk";
+import type { ClaudePlusPlusUpdateCheck } from "../src/config.ts";
+import type { ClaudePlusPlusConfigView } from "../src/update-service.ts";
+import type { WatcherHealth } from "../src/watcher-health.ts";
 import {
   clearSettingsPages,
   registerPage,
+  setSettingsManagementBridge,
   startSettingsInjector,
 } from "../src/preload/settings-injector.ts";
 import { classTokens, settingsFixture } from "./fixtures/settings-dom.ts";
@@ -200,6 +204,275 @@ test("contains one page render failure and still opens another registered page",
   clearSettingsPages();
 });
 
+test("a hidden navigation mount defers product metadata until first visibility", async () => {
+  const fixture = settingsFixture({ display: "none" });
+  const product = deferred<ClaudePlusPlusUpdateCheck>();
+  const calls: string[] = [];
+  setSettingsManagementBridge(async (channel) => {
+    calls.push(channel);
+    if (channel === "claudepp:check-claudepp-update") return await product.promise;
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fixture.environment);
+  assert.ok(fixture.findPageButton("claudepp:config"));
+  assert.deepEqual(calls, []);
+
+  fixture.setDialogStyle({ display: "block", visibility: "visible" });
+  fixture.flushAttributeMutation();
+  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+  assert.ok(fixture.findPageButton("claudepp:config"));
+  product.resolve(availableProductCheck());
+  await flushPromises();
+  assert.equal(fixture.countGroupActions("claudepp-update"), 1);
+});
+
+test("a direct visible shell replacement checks product metadata for the new mount", async () => {
+  const fixture = settingsFixture();
+  const calls: string[] = [];
+  setSettingsManagementBridge(async (channel) => {
+    calls.push(channel);
+    if (channel === "claudepp:check-claudepp-update") return currentProductCheck();
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fixture.environment);
+  await flushPromises();
+  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+
+  fixture.replaceVisibleSettingsShell();
+  fixture.flushMutation();
+  assert.deepEqual(calls, [
+    "claudepp:check-claudepp-update",
+    "claudepp:check-claudepp-update",
+  ]);
+});
+
+test("same-shell observer and visibility noise does not repeat a mounted product check", async () => {
+  const fixture = settingsFixture();
+  const calls: string[] = [];
+  setSettingsManagementBridge(async (channel) => {
+    calls.push(channel);
+    if (channel === "claudepp:check-claudepp-update") return currentProductCheck();
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fixture.environment);
+  await flushPromises();
+
+  fixture.flushMutation();
+  fixture.setDialogStyle({ display: "none", visibility: "visible" });
+  fixture.flushAttributeMutation();
+  fixture.setDialogStyle({ display: "block", visibility: "visible" });
+  fixture.flushAttributeMutation();
+  fixture.flushResize();
+  fixture.flushWindowResize();
+
+  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+  assert.ok(fixture.findPageButton("claudepp:config"));
+});
+
+test("a recreated owned group checks only when that mount becomes visible", async () => {
+  const fixture = settingsFixture();
+  const calls: string[] = [];
+  setSettingsManagementBridge(async (channel) => {
+    calls.push(channel);
+    if (channel === "claudepp:check-claudepp-update") return currentProductCheck();
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fixture.environment);
+  await flushPromises();
+
+  fixture.setDialogStyle({ display: "none", visibility: "visible" });
+  fixture.flushAttributeMutation();
+  fixture.removeInjectedSettingsGroups();
+  fixture.flushMutation();
+  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+  assert.ok(fixture.findPageButton("claudepp:config"));
+
+  fixture.setDialogStyle({ display: "block", visibility: "visible" });
+  fixture.flushAttributeMutation();
+  assert.deepEqual(calls, [
+    "claudepp:check-claudepp-update",
+    "claudepp:check-claudepp-update",
+  ]);
+});
+
+test("an automatic product IPC rejection clears the action without removing navigation", async () => {
+  const fixture = settingsFixture();
+  let productCalls = 0;
+  setSettingsManagementBridge(async (channel) => {
+    if (channel !== "claudepp:check-claudepp-update") throw new Error(`unexpected ${channel}`);
+    productCalls += 1;
+    if (productCalls === 1) return availableProductCheck();
+    throw new Error("fixture product check failure");
+  });
+  startSettingsInjector(fixture.environment);
+  await flushPromises();
+  assert.equal(fixture.countGroupActions("claudepp-update"), 1);
+
+  fixture.replaceVisibleSettingsShell();
+  fixture.flushMutation();
+  await flushPromises();
+
+  assert.equal(fixture.countGroupActions("claudepp-update"), 0);
+  assert.ok(fixture.findPageButton("claudepp:config"));
+});
+
+test("an old document's automatic completion cannot publish into a replacement environment", async () => {
+  const fixtureA = settingsFixture();
+  const automaticA = deferred<ClaudePlusPlusUpdateCheck>();
+  const calls: string[] = [];
+  setSettingsManagementBridge(async (channel) => {
+    calls.push(channel);
+    if (channel === "claudepp:check-claudepp-update") return await automaticA.promise;
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fixtureA.environment);
+  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+
+  const fixtureB = settingsFixture({ display: "none" });
+  setSettingsManagementBridge(async (channel) => {
+    calls.push(channel);
+    throw new Error(`unexpected replacement call ${channel}`);
+  });
+  startSettingsInjector(fixtureB.environment);
+  automaticA.resolve(availableProductCheck());
+  await flushPromises();
+
+  assert.equal(fixtureA.countGroupActions("claudepp-update"), 0);
+  assert.equal(fixtureB.countGroupActions("claudepp-update"), 0);
+  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+});
+
+test("an old Config forced completion cannot publish or rerender after environment replacement", async () => {
+  const fixtureA = settingsFixture();
+  const forcedA = deferred<ClaudePlusPlusUpdateCheck>();
+  const calls: Array<[string, ...unknown[]]> = [];
+  setSettingsManagementBridge(async (channel, ...args) => {
+    calls.push([channel, ...args]);
+    if (channel === "claudepp:check-claudepp-update" && args[0] === false) {
+      return currentProductCheck();
+    }
+    if (channel === "claudepp:check-claudepp-update" && args[0] === true) {
+      return await forcedA.promise;
+    }
+    if (channel === "claudepp:get-config") return configView();
+    if (channel === "claudepp:get-watcher-health") return absentWatcher();
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fixtureA.environment);
+  fixtureA.click(fixtureA.findPageButton("claudepp:config"));
+  await flushPromises();
+  const oldRoot = fixtureA.findPanel();
+  assert.ok(oldRoot);
+  const updates = findSectionByHeading(oldRoot as unknown as HTMLElement, "Claude++ Updates");
+  fixtureA.click(findButtonByText(updates, "Check Now"));
+  const oldText = oldRoot.textContent;
+
+  const fixtureB = settingsFixture({ display: "none" });
+  startSettingsInjector(fixtureB.environment);
+  const callCountBeforeSettlement = calls.length;
+  forcedA.resolve(availableProductCheck());
+  await flushPromises();
+
+  assert.equal(fixtureB.countGroupActions("claudepp-update"), 0);
+  assert.equal(oldRoot.textContent, oldText);
+  assert.equal(calls.length, callCountBeforeSettlement);
+});
+
+test("automatic and forced product checks publish strictly in completion order", async () => {
+  const automaticFirst = deferred<ClaudePlusPlusUpdateCheck>();
+  const forcedSecond = deferred<ClaudePlusPlusUpdateCheck>();
+  const visible = settingsFixture();
+  setSettingsManagementBridge(productBridge(automaticFirst, forcedSecond));
+  startSettingsInjector(visible.environment);
+  visible.click(visible.findPageButton("claudepp:config"));
+  await flushPromises();
+  const visiblePanel = visible.findPanel();
+  assert.ok(visiblePanel);
+  visible.click(findButtonByText(
+    findSectionByHeading(visiblePanel as unknown as HTMLElement, "Claude++ Updates"),
+    "Check Now",
+  ));
+
+  forcedSecond.resolve(productCheck({ latestVersion: "0.3.2" }));
+  await flushPromises();
+  assert.equal(visible.countGroupActions("claudepp-update"), 1);
+  automaticFirst.resolve(currentProductCheck());
+  await flushPromises();
+  assert.equal(visible.countGroupActions("claudepp-update"), 0);
+
+  const forcedFirst = deferred<ClaudePlusPlusUpdateCheck>();
+  const automaticSecond = deferred<ClaudePlusPlusUpdateCheck>();
+  const hidden = settingsFixture({ display: "none" });
+  setSettingsManagementBridge(productBridge(automaticSecond, forcedFirst));
+  startSettingsInjector(hidden.environment);
+  hidden.click(hidden.findPageButton("claudepp:config"));
+  await flushPromises();
+  const hiddenPanel = hidden.findPanel();
+  assert.ok(hiddenPanel);
+  hidden.click(findButtonByText(
+    findSectionByHeading(hiddenPanel as unknown as HTMLElement, "Claude++ Updates"),
+    "Check Now",
+  ));
+  hidden.setDialogStyle({ display: "block", visibility: "visible" });
+  hidden.flushAttributeMutation();
+
+  automaticSecond.resolve(availableProductCheck());
+  await flushPromises();
+  assert.equal(hidden.countGroupActions("claudepp-update"), 1);
+  forcedFirst.resolve(currentProductCheck());
+  await flushPromises();
+  assert.equal(hidden.countGroupActions("claudepp-update"), 0);
+});
+
+test("the production Update action only opens its current release target", async () => {
+  const rejectingBridge = async (channel: string): Promise<unknown> => {
+    throw new Error(`Claude++ Settings management bridge is unavailable: ${channel}`);
+  };
+  try {
+    const calls: unknown[] = [];
+    const fixture = settingsFixture();
+    setSettingsManagementBridge(async (channel, ...args) => {
+      calls.push(channel, ...args);
+      if (channel === "claudepp:check-claudepp-update") return availableProductCheck();
+      if (channel === "claudepp:open-external") return undefined;
+      throw new Error(`unexpected ${channel}`);
+    });
+    startSettingsInjector(fixture.environment);
+    await flushPromises();
+    const beforeClick = calls.length;
+    fixture.click(fixture.groupAction("claudepp-update"));
+    await flushPromises();
+    assert.deepEqual(calls.slice(beforeClick), [
+      "claudepp:open-external",
+      "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.1",
+    ]);
+    assertNoUpdateSideEffects(calls);
+
+    const fallbackCalls: unknown[] = [];
+    const fallbackFixture = settingsFixture();
+    setSettingsManagementBridge(async (channel, ...args) => {
+      fallbackCalls.push(channel, ...args);
+      if (channel === "claudepp:check-claudepp-update") {
+        return productCheck({ releaseUrl: null });
+      }
+      if (channel === "claudepp:open-external") return undefined;
+      throw new Error(`unexpected ${channel}`);
+    });
+    startSettingsInjector(fallbackFixture.environment);
+    await flushPromises();
+    const fallbackBeforeClick = fallbackCalls.length;
+    fallbackFixture.click(fallbackFixture.groupAction("claudepp-update"));
+    await flushPromises();
+    assert.deepEqual(fallbackCalls.slice(fallbackBeforeClick), [
+      "claudepp:open-external",
+      "https://github.com/kpkhxlgy0/claude-plusplus/releases",
+    ]);
+    assertNoUpdateSideEffects(fallbackCalls);
+  } finally {
+    setSettingsManagementBridge(rejectingBridge);
+  }
+});
+
 function manifest(id: string): TweakManifest {
   return {
     id,
@@ -208,4 +481,111 @@ function manifest(id: string): TweakManifest {
     githubRepo: "example/settings",
     permissions: ["settings"],
   };
+}
+
+function productCheck(
+  overrides: Partial<ClaudePlusPlusUpdateCheck> = {},
+): ClaudePlusPlusUpdateCheck {
+  return {
+    checkedAt: "2026-08-22T00:00:00.000Z",
+    currentVersion: "0.3.0",
+    latestVersion: "0.3.1",
+    releaseUrl: "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.1",
+    releaseNotes: null,
+    updateAvailable: true,
+    ...overrides,
+  };
+}
+
+function availableProductCheck(
+  releaseUrl = "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.1",
+): ClaudePlusPlusUpdateCheck {
+  return productCheck({ releaseUrl });
+}
+
+function currentProductCheck(): ClaudePlusPlusUpdateCheck {
+  return productCheck({
+    latestVersion: "0.3.0",
+    releaseUrl: "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.0",
+    updateAvailable: false,
+  });
+}
+
+function configView(): ClaudePlusPlusConfigView {
+  return {
+    version: "0.3.0",
+    autoUpdate: false,
+    updateChannel: "stable",
+    updateRepo: "kpkhxlgy0/claude-plusplus",
+    updateRef: "",
+    installationSource: { label: "Packaged Windows release", detail: "Bundled Node.js runtime" },
+    updateCheck: null,
+    selfUpdate: null,
+  };
+}
+
+function absentWatcher(): WatcherHealth {
+  return {
+    checkedAt: "2026-08-22T00:00:00.000Z",
+    status: "warn",
+    title: "Auto-repair Watcher is not installed",
+    summary: "Watcher is not installed.",
+    watcher: "none",
+    installed: false,
+    autoUpdate: false,
+    autoUpdateAvailable: false,
+    checks: [],
+  };
+}
+
+function productBridge(
+  automatic: Deferred<ClaudePlusPlusUpdateCheck>,
+  forced: Deferred<ClaudePlusPlusUpdateCheck>,
+): (channel: string, ...args: unknown[]) => Promise<unknown> {
+  return async (channel, ...args) => {
+    if (channel === "claudepp:check-claudepp-update") {
+      return await (args[0] === true ? forced.promise : automatic.promise);
+    }
+    if (channel === "claudepp:get-config") return configView();
+    if (channel === "claudepp:get-watcher-health") return absentWatcher();
+    throw new Error(`unexpected ${channel}`);
+  };
+}
+
+function findSectionByHeading(root: HTMLElement, label: string): HTMLElement {
+  const section = Array.from(root.querySelectorAll<HTMLElement>("section"))
+    .find((candidate) => candidate.textContent?.trim().startsWith(label));
+  assert.ok(section);
+  return section;
+}
+
+function findButtonByText(root: HTMLElement, label: string): HTMLButtonElement {
+  const button = Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+    .find((candidate) => candidate.textContent?.trim() === label);
+  assert.ok(button);
+  return button;
+}
+
+function assertNoUpdateSideEffects(calls: readonly unknown[]): void {
+  const forbidden = calls.filter((call): call is string => typeof call === "string")
+    .filter((channel) =>
+      channel === "claudepp:run-claudepp-update" ||
+      channel === "claudepp:install-store-tweak" ||
+      /watcher|spawn|archive/i.test(channel));
+  assert.deepEqual(forbidden, []);
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => { resolve = nextResolve; });
+  return { promise, resolve };
+}
+
+function flushPromises(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }

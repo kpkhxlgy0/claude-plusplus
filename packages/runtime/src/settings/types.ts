@@ -3,6 +3,7 @@ import type {
   SettingsSection,
   TweakManifest,
 } from "@claude-plusplus/sdk";
+import type { ClaudePlusPlusUpdateCheck } from "../config.js";
 import type { ListedTweak } from "../tweak-catalog.js";
 
 export type BuiltInSettingsRoute =
@@ -32,6 +33,7 @@ export interface SettingsProductPageContext {
   pages: readonly RegisteredSettingsPage[];
   activate(id: string): void;
   setStoreUpdateCount(count: number): void;
+  setProductUpdateCheck(check: ClaudePlusPlusUpdateCheck | null): void;
 }
 
 export type SettingsProductPageRenderer = (
@@ -42,4 +44,5 @@ export interface SettingsProductServices {
   renderConfig: SettingsProductPageRenderer;
   renderTweaks: SettingsProductPageRenderer;
   renderStore: SettingsProductPageRenderer;
+  openExternal(url: string): Promise<unknown>;
 }

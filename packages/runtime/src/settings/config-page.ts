@@ -18,6 +18,7 @@ import {
 export interface ConfigPageContext {
   root: HTMLElement;
   invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
+  publishProductUpdate(check: ClaudePlusPlusUpdateCheck | null): void;
 }
 
 export async function renderConfigPage(context: ConfigPageContext): Promise<() => void> {
@@ -158,7 +159,12 @@ function updateActionsRow(context: ConfigPageContext, config: ClaudePlusPlusConf
     updateSummary(check),
   );
   action.actions.appendChild(settingsButton(document, "Check Now", async () => {
-    await context.invoke("claudepp:check-claudepp-update", true);
+    const result = await context.invoke<ClaudePlusPlusUpdateCheck>(
+      "claudepp:check-claudepp-update",
+      true,
+    );
+    context.publishProductUpdate(result);
+    if (!context.root.isConnected) return;
     await renderConfigPage(context);
   }));
   if (check?.releaseUrl) {
