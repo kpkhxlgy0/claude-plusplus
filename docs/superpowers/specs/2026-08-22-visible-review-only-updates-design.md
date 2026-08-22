@@ -1,7 +1,7 @@
 # Visible Review-Only Updates Design
 
 **Date:** 2026-08-22
-**Status:** Approved design; awaiting written-spec review
+**Status:** Approved design; implementation planned
 **Reference:** Installed Codex++ v1.0.0 source under `C:\Users\Admin\.codex-plusplus\source`
 
 ## Purpose
@@ -34,8 +34,8 @@ scoped differences were explicitly approved by the user on 2026-08-22:
   existing installed-update count before the Store page is opened.
 - Keep every update action advisory until the user explicitly opens a release, installs a Store entry, or starts the
   existing Claude++ update command.
-- Contain network, persistence, replaced-Renderer, and detached-DOM failures without breaking Settings or Renderer Tweak
-  startup.
+- Contain product/Tweak metadata, persistence, replaced-Renderer, and detached-DOM failures without breaking Settings
+  or Renderer Tweak startup. Automatic Store-warm rejection handling remains exactly as in Codex++.
 - Preserve the approved opt-in Watcher policy and all existing update-channel choices.
 
 ## Non-goals
@@ -70,11 +70,13 @@ The inspected Codex++ v1.0.0 implementation provides the reference behavior:
   version.
 - `packages/runtime/src/main.ts:1099-1142` bounds each GitHub request with an eight-second abort and turns network/HTTP
   failures into advisory error results.
-- `packages/runtime/src/preload/settings-injector.ts:447-450,1984-2043` checks for a Codex++ product update as the
-  Settings navigation group is mounted, shows a group-header `Update` pill only for a newer release, and opens the
-  release URL when clicked.
-- `packages/runtime/src/preload/settings-injector.ts:707-720,1668-1680` warms the Store on the hidden-to-visible
-  Settings transition and reuses an in-memory result or in-flight request.
+- `packages/runtime/src/preload/settings-injector.ts:401-450,1984-2043,2939-2993` checks for a Codex++ product update when
+  the Settings navigation group is created or recovered after a remount in a visible sidebar candidate, but returns
+  early when its owned group is already attached. It shows a group-header `Update` pill for a newer release, falls back
+  to the official releases page when the result lacks a URL, and leaves click rejection without a local handler.
+- `packages/runtime/src/preload/settings-injector.ts:707-720,1668-1693` warms the Store on the hidden-to-visible
+  Settings transition, reuses an in-memory result or in-flight request, and deliberately has no local rejection
+  handler on the automatic warm path.
 - `packages/runtime/src/main.ts:1033-1048,1099-1134` uses the saved update repository for every channel, calls
   `/releases/latest` for Stable, and calls the release-list endpoint only for Prerelease.
 
@@ -102,37 +104,42 @@ The product promise is:
 ```text
 Renderer catalog request
   -> Main snapshots installed Tweaks
-  -> selects compatible candidates with an existing entry
+  -> selects candidates with an existing entry, including runtime-incompatible rows
   -> starts one check per distinct Tweak identity, all in parallel
   -> same-identity concurrent callers share one result
   -> advisory cache persistence is validity-aware and best-effort
   -> Main returns the catalog with the current batch's fresh results attached
   -> Renderer starts/restarts Tweaks and publishes Settings rows
 
-Settings shell becomes visible
-  -> product release metadata check and Store warm start concurrently
+Settings navigation group mounts or remounts and is visually visible
+  -> product release metadata check starts after navigation exists
   -> product result updates controller-owned group-header action
+
+Settings shell becomes visible
+  -> Store warm starts independently of product-check timing
   -> Store result updates controller-owned numeric Store badge
   -> Renderer remount recreates navigation from controller state
 ```
 
-Main owns release requests and persisted cache state. Renderer owns Settings visibility, short-lived Store caching, and
-visible indicator state. Renderer never writes update cache files directly, and the Settings DOM is never the source of
-truth for an asynchronous result.
+Main owns release requests and persisted cache state. Renderer owns Settings navigation lifecycle, visual Store
+visibility, short-lived Store caching, and visible indicator state. Renderer never writes update cache files directly,
+and the Settings DOM is never the source of truth for an asynchronous result.
 
 ## Installed-Tweak Release Checks
 
 ### Catalog selection
 
-`claudepp:list-tweaks` first snapshots `listInstalledTweaks()`. It schedules release checks only for candidates whose
-entry exists and whose `minRuntime` is compatible with the current Runtime. This matches Codex++'s runnable discovery
-set and avoids requests for broken or future-runtime projects.
+`claudepp:list-tweaks` first snapshots `listInstalledTweaks()`. It schedules release checks for every candidate whose
+entry exists, including candidates whose `minRuntime` is incompatible with the current Runtime. Codex++ discovery
+requires an existing entry but does not gate release checks on `minRuntime`; Claude++ keeps its extra incompatible
+diagnostic rows while applying that same request rule. Missing-entry diagnostic rows do not start a request.
 
-Enabled state is not a check gate: a compatible disabled Tweak remains eligible, matching Codex++. Safe Mode continues
-to omit the Renderer preload, so the normal automatic Renderer catalog request does not occur on a Safe Mode cold
-start. The handler itself remains management IPC and does not gain a separate Safe Mode branch.
+Enabled state is not a check gate: disabled and runtime-incompatible entry-present Tweaks remain eligible, matching the
+Codex++ discovered-set behavior. Safe Mode continues to omit the Renderer preload, so the normal automatic Renderer
+catalog request does not occur on a Safe Mode cold start. The handler itself remains management IPC and does not gain a
+separate Safe Mode branch.
 
-All eligible checks start before any is awaited. The catalog response waits for the slowest distinct request. Each
+All entry-present checks start before any is awaited. The catalog response waits for the slowest distinct request. Each
 request retains the existing eight-second abort, so a normal concurrent batch is bounded by the slowest request rather
 than eight seconds multiplied by the number of Tweaks.
 
@@ -158,7 +165,7 @@ maximum.
 ### Returning fresh results
 
 The list handler attaches the checks returned by the current batch directly to its catalog response. It does not
-depend on a successful cache write or a second read to make the current result visible. A non-eligible candidate remains
+depend on a successful cache write or a second read to make the current result visible. A missing-entry candidate remains
 visible for diagnosis, but receives an existing cached result only when both `repo` and `currentVersion` match its
 current manifest; otherwise its update is `null`. This preserves Codex++'s identity-validated attachment semantics for
 Claude++'s additional diagnostic rows.
@@ -213,22 +220,31 @@ selection instead of Codex++'s Stable `/releases/latest` request. This keeps the
 which rejects non-official Stable/Prerelease repositories. Automatic product checks use `force: false`; the Config
 page's explicit `Check Now` continues to force a request while using the same safe advisory-cache writer.
 
-The Claude Settings shell adapter reports only surface visibility transitions. A shell is visible only when its dialog
-is connected, computed `display` is not `none`, computed `visibility` is not `hidden`, and its bounding box has positive
-width and height. A present but hidden dialog does not trigger metadata traffic. The adapter extends its existing
-subtree child-list observer with subtree `class` / `style` / `hidden` / `aria-hidden` / `open` attribute observation,
-adds a `ResizeObserver` for the current dialog, and listens for window resize; observer dependencies remain injectable
-for tests and no polling timer is added. The first false-to-true transition starts an
-asynchronous product check without delaying navigation injection. A visible shell replacement does not create an
-artificial hidden transition. Closing/hiding and reopening can call the product service again, but the persisted
-24-hour cache normally prevents another network request.
+The Claude Settings shell adapter reports both navigation-group mount/remount and surface visibility. Product checks
+follow Codex++'s navigation lifecycle: after the `CLAUDE++` group is first attached or recovered/recreated for a remounted
+shell, a `force: false` product check starts once that mount is visually visible, without delaying the navigation. If
+Claude's hidden dialog DOM is discovered first, the check remains pending until that mounted group first becomes
+visible. Direct replacement or remount of one visible shell with another attaches navigation again and therefore checks
+again even though visibility never transitioned through false; the Main 24-hour cache normally prevents another GitHub
+request. Ordinary observer synchronization and controller-driven navigation-state renders do not report another
+product trigger while the owned group remains attached. This matches Codex++'s visible-sidebar candidate and
+early-return branches and prevents recursive checks.
+
+Store warming alone uses the strict visual predicate. A shell is visible only when its dialog is connected, computed
+`display` is not `none`, computed `visibility` is not `hidden`, and its bounding box has positive width and height. The
+adapter extends its existing subtree child-list observer with subtree `class` / `style` / `hidden` / `aria-hidden` /
+`open` attribute observation, adds a `ResizeObserver` for the current dialog, and listens for window resize; observer
+dependencies remain injectable for tests and no polling timer is added. A visible shell replacement does not create an
+artificial hidden-to-visible transition for Store warming.
 
 `SettingsProductController` owns the current product indicator. Both the automatic Settings check and Config-page
 `Check Now` publish their completed result through the same controller setter, so the page and group heading agree.
 Overlapping automatic and forced checks retain Codex++'s last-completion behavior; this design does not add
 latest-request-wins arbitration. When `updateAvailable` is true, the `CLAUDE++` group heading receives a blue `Update`
-action with a version-aware accessible title. Clicking it invokes only `claudepp:open-external` for the controller's
-current validated GitHub release URL. A current, missing, or failed check removes the action.
+action with a version-aware accessible title even when `releaseUrl` is missing. Clicking it dereferences the current
+controller result and invokes only `claudepp:open-external`, using the current release URL when present and
+`https://github.com/kpkhxlgy0/claude-plusplus/releases` otherwise. A current or failed check removes the action. The
+fire-and-forget click path deliberately has no local rejection handler, matching Codex++.
 
 The shell adapter gains a generic optional group-header action model rather than product-specific DOM code. The action
 callback dereferences controller state when clicked rather than capturing a release URL. Consequently a same-version
@@ -237,19 +253,22 @@ title are unchanged.
 
 ## Store Warm and Badge
 
-When the Settings surface first becomes visible in a Renderer process, the Store warm begins concurrently with the
-product check. It uses the existing renderer-local `cachedStore` / `storePromise` single-flight state and the existing
-`claudepp:get-tweak-store` Main service. It does not wait before injecting navigation or opening a native Settings
-page.
+When the Settings surface first becomes visible in a Renderer process, the Store warm begins. On an initially visible
+shell, the navigation-triggered product check and visibility-triggered Store warm both start during the same synchronous
+injector setup turn, but they remain separate triggers. The warm uses the existing renderer-local `cachedStore` /
+`storePromise` single-flight state and the existing `claudepp:get-tweak-store` Main service. It does not wait before
+injecting navigation or opening a native Settings page.
 
 On success, the existing Store mismatch calculation publishes a count to `SettingsProductController`, which renders
 the numeric badge on the `Tweak Store` item. Opening the Store reuses the warmed registry. Manual `Refresh` clears the
 cache and forces a new request; successful Store installation also clears it before the existing delayed refresh;
 Renderer restart clears all renderer-local Store state.
 
-Warm or render failure clears the visible count, leaves no rejected promise unhandled, and keeps the Store page's
-existing explicit error and Refresh path. This design does not add a Store TTL and does not promise a request on every
-Settings reopen.
+The automatic warm intentionally mirrors Codex++'s local failure semantics: it attaches only a success continuation,
+so a rejected Store request is not caught by the warm path. The shared in-flight promise is still cleared in
+`finally`, allowing a later visibility transition or Store-page open to retry. A Store-page render failure keeps its
+existing explicit error/Refresh UI and clears the visible count. This design does not add a Store TTL and does not
+promise a request on every Settings reopen.
 
 The count deliberately retains the current Codex++-aligned mismatch semantics: any installed version unequal to the
 approved Store manifest version counts. Correcting newer-local-version downgrade affordances or same-id non-Store
@@ -261,7 +280,7 @@ approved Store lifecycle difference.
 
 ## Renderer Lifecycle and Hot Reload Impact
 
-Claude++ Renderer startup and reconstruction await `claudepp:list-tweaks`. After this change, the first eligible check
+Claude++ Renderer startup and reconstruction await `claudepp:list-tweaks`. After this change, the first entry-present check
 with no valid persistent cache can delay Renderer Tweak startup by up to the slowest request timeout,
 normally about eight seconds. During Renderer reconstruction, the prior Renderer Tweak lifecycle has already stopped
 and Settings registrations have been cleared before the catalog request, so a stale-cache hot reload can temporarily
@@ -283,10 +302,14 @@ Chokidar debounce are unchanged.
   environment generation. An old environment cannot update a new controller or detached DOM.
 - Automatic and forced product checks update controller and persisted state in completion order. No request-generation
   priority is implied.
-- Store warm failures are caught and hide the Store count. A later page open or manual Refresh may retry.
+- Automatic Store warm rejection is not caught locally, matching Codex++; its in-flight state still clears so a later
+  visibility transition, page open, or manual Refresh may retry. Store-page render failure remains caught and clears
+  the count.
 - Product IPC rejection is caught and hides the group-header action. The Config page remains available for a manual
   retry and detailed result.
-- Navigation is always built before product or Store metadata completes.
+- Product action clicks and automatic Store warm have no local rejection handler, matching Codex++; product-check IPC
+  rejection and explicit Store-page rendering remain caught at their reference-aligned boundaries.
+- Navigation is always built before a product check starts or Store metadata completes.
 - Indicator clicks use the existing GitHub-only external-URL gate. No metadata result can supply a command line,
   executable path, or automatic installation action.
 
@@ -305,7 +328,8 @@ No new persistent file or public SDK field is introduced.
   defaults to the real coordinator.
 - `SettingsNavigationGroup` gains an optional generic header action.
 - The Claude Settings shell adapter environment supplies computed-style and geometry access plus injectable attribute,
-  resize, and window-resize observation, and reports defined visible/hidden transitions to the Settings injector.
+  resize, and window-resize observation, and reports navigation-group mount/remount separately from defined
+  visible/hidden transitions to the Settings injector.
 - `SettingsProductController` gains product-update state and a setter; the Config page context can publish a forced
   check through that setter, while Store count remains its existing state.
 - Store page exports a warm operation backed by the same cache and in-flight request as normal rendering.
@@ -319,13 +343,21 @@ No management channel is added for automatic archive download, installation, Wat
 Update the author-facing distribution guide and user-facing update documentation to say:
 
 - installed-Tweak release metadata can be requested during Renderer startup and hot reload;
+- every entry-present installed Tweak is checked even when runtime-incompatible or disabled; missing-entry diagnostic
+  rows do not start a request;
 - requests are concurrent and may delay the first stale-cache Renderer Tweak start for about eight seconds;
 - a matching persistent result is reused for 24 hours and overlapping same-identity requests share one promise, while
   separate processes or later calls without usable persisted state can check independently;
 - Stable and Prerelease product indicators use the official Claude++ repository, while Custom uses its saved
   repository;
-- product and Store metadata begin only when Settings first becomes visually visible in a Renderer process;
+- product metadata begins when a newly mounted/remounted Claude++ Settings navigation group is visually visible; a
+  hidden mount defers its check until first visibility. Store metadata begins on each false-to-true visually visible
+  transition in a Renderer process;
+- a product update with no release URL still opens the official Claude++ releases page, and its fire-and-forget click
+  path has no local rejection handler, matching Codex++;
 - Store memory is reused until manual Refresh, successful Store installation, or Renderer restart;
+- automatic Store warm has no local rejection handler, matching Codex++; explicit Store-page load failure is caught,
+  clears the badge, and keeps the page's error/Refresh state;
 - the Config page's manual `Check Now` publishes through the same product-indicator state and uses the same
   validity-aware advisory-cache writer as automatic checks;
 - parallel advisory completions for distinct persisted slots merge into the latest valid config instead of writing
@@ -343,8 +375,8 @@ not contact GitHub, alter the live user profile, wait eight wall-clock seconds, 
 
 ### Main and Tweak coordinator
 
-- Three stale runnable Tweaks start all distinct requests before any resolves; the list response remains pending until
-  all settle and contains those fresh results.
+- Three stale entry-present Tweaks, including one runtime-incompatible row, start all distinct requests before any
+  resolves; the list response remains pending until all settle and contains those fresh results.
 - Matching cache at `24h - 1ms` is reused; exactly 24 hours, repository change, and version change create a new check.
 - Two concurrent list calls for the same config/id/repository/version share one request and both receive the same
   result.
@@ -353,9 +385,10 @@ not contact GitHub, alter the live user profile, wait eight wall-clock seconds, 
 - Different identities do not share a promise, and each current caller receives its own completed result. If their
   id-keyed persisted writes overlap, the last completion may remain on disk; a later caller rejects that cache when its
   repository or installed version does not match.
-- Compatible disabled Tweaks are checked; missing-entry and incompatible candidates are not.
-- Missing-entry and incompatible diagnostic rows attach a cached check only when its repository and installed version
-  match the current manifest; a different-identity id-keyed cache is exposed as `null`.
+- Disabled and runtime-incompatible entry-present Tweaks are checked; missing-entry candidates are not.
+- Missing-entry diagnostic rows attach a cached check only when its repository and installed version match the current
+  manifest; a different-identity id-keyed cache is exposed as `null`. Runtime-incompatible entry-present rows receive
+  the current batch result.
 - HTTP 404, non-success status, timeout, request rejection, refused-invalid persistence, and write failure return a
   catalog rather than rejecting Renderer startup.
 - A present malformed or non-object config remains byte-for-byte unchanged after automatic product and Tweak checks;
@@ -374,17 +407,22 @@ not contact GitHub, alter the live user profile, wait eight wall-clock seconds, 
 
 ### Settings shell and product indicator
 
-- A connected shell with `display: none`, `visibility: hidden`, zero width, or zero height does not start a product or
-  Store request; the first connected, displayed, visible, positive-area state does.
+- Mounting/remounting the Claude++ navigation group while `display: none`, `visibility: hidden`, or zero-area starts
+  neither request; the mount's first positive visual predicate starts both the pending product check and Store warm.
 - Attribute-observer, resize-observer, and window-resize test doubles each drive predicate re-evaluation; visibility
   tests exercise those public observer signals rather than directly invoking an internal synchronization function.
-- Initial visibility injects navigation immediately, then starts product and Store metadata work concurrently.
+- For an initially visible shell, navigation is injected first, then product and Store metadata work both start before
+  the injector setup turn returns.
 - MutationObserver noise does not create duplicate visibility transitions or duplicate buttons. Removing a shell
   produces a hidden state, while replacing one visible shell directly with another does not invent an intermediate
   hidden-to-visible trigger.
-- Hidden then visible transitions may call the cached product service again while Store memory is reused.
-- Update available adds exactly one group-header action with an accessible version title; current/error results remove
-  it.
+- A same-shell observer turn with unchanged navigation performs no same-value write to the observed `class` attribute
+  and does not queue a MutationObserver feedback loop.
+- A direct visible-shell replacement remounts navigation and checks product metadata again while Store visibility
+  remains continuously true and therefore does not warm again. Same-shell observer noise and visibility changes do not
+  check product metadata again after that mount's product check has started while the owned group remains attached.
+- Update available adds exactly one group-header action with an accessible version title; a missing release URL keeps
+  the action and clicking it opens the official releases page; current/error results remove it.
 - The Config page's forced `Check Now` updates the same controller and group-header action. Malformed, non-object, or
   unreadable config still follows the validity-aware refusal path while the completed advisory result remains visible.
 - Overlapping automatic and forced product checks publish in completion order, documenting the retained
@@ -392,14 +430,16 @@ not contact GitHub, alter the live user profile, wait eight wall-clock seconds, 
 - If controller state changes to the same version with a different validated release URL, clicking the unchanged action
   opens the current URL rather than one captured by its original render.
 - Clicking the action invokes only the GitHub external-open IPC and never run-update, Store-install, Watcher, spawn, or
-  archive paths.
+  archive paths. Its source shape has no local rejection handler; do not execute an intentional rejection in the Node
+  test runner.
 - A deferred result from a disposed Settings environment cannot update the replacement controller or detached DOM.
 
 ### Store warm and packaging regression
 
 - Warm and page render share one normal in-flight Store request.
 - Successful warm publishes the existing mismatch count before the Store page opens.
-- Warm/render failure is contained, hides the count, and permits a later retry.
+- Store-page render failure is contained, hides the count, and permits a later retry. Automatic warm rejection is not
+  caught locally, matching Codex++, while its in-flight state still clears for a later retry.
 - An overlapping automatic warm and forced Refresh retain last-completion cache behavior; no latest-request-wins claim
   is made.
 - Successful Store installation clears the renderer-local Store cache before keeping the existing decrement and
@@ -454,12 +494,18 @@ host divergence already applies. In particular, checks remain blocking on the Re
 indicator remains a group-header review action, Store warming is tied to Settings visibility, Store mismatch semantics
 remain unchanged, and no automatic installation is introduced.
 
+The user reconfirmed strict Codex++ behavior for two audited boundaries on 2026-08-22: release checks include
+runtime-incompatible entry-present Tweaks, and the automatic Store warm does not add a local rejection handler. A final
+source audit also preserves Codex++'s visually eligible navigation mount/remount product trigger and attached-group early
+return, official releases-page fallback for a missing result URL, and lack of a local product-click rejection handler.
+These are reference-aligned behaviors, not additional approved differences.
+
 ## Success Criteria
 
-- An installed compatible Tweak with a newer GitHub release shows `Update Available` and a working `Review Release`
-  action after the awaited catalog check.
+- An installed entry-present Tweak, including a runtime-incompatible diagnostic row, can show `Update Available` and a
+  working `Review Release` action after the awaited catalog check.
 - A newer Claude++ release shows one `Update` action beside the `CLAUDE++` Settings heading; clicking it only opens the
-  GitHub release.
+  GitHub release, or the official Claude++ releases page when the result URL is absent.
 - Stable and Prerelease indicators use the official repository accepted by the Installer and retain Claude++'s
   release-list selection, while Custom uses its saved repository.
 - Reviewed Store version mismatches show a numeric Store badge before the Store page is opened.
