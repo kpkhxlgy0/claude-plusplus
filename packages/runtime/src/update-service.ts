@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  mutateRuntimeConfig,
+  mutateRuntimeConfigAdvisory,
   readRuntimeConfig,
   type ClaudePlusPlusUpdateCheck,
   type UpdateChannel,
@@ -52,10 +52,26 @@ export interface GitHubReleaseView {
   prerelease?: boolean;
 }
 
+export interface ProductUpdateTimer {
+  set(callback: () => void, delay: number): ProductUpdateTimerHandle;
+  clear(handle: ProductUpdateTimerHandle): void;
+}
+
+export type ProductUpdateTimerHandle = object;
+
+const defaultProductUpdateTimer: ProductUpdateTimer = {
+  set: (callback, delay) => setTimeout(callback, delay) as ProductUpdateTimerHandle,
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 export interface CheckClaudePlusPlusUpdateOptions extends UpdateServicePaths {
   force?: boolean;
   now?: () => Date;
   requestReleases?: (repo: string) => Promise<GitHubReleaseView[]>;
+  request?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+  timer?: ProductUpdateTimer;
+  persist?: typeof mutateRuntimeConfigAdvisory;
+  onIssue?: (message: string) => void;
 }
 
 export interface RunClaudePlusPlusUpdateOptions extends UpdateServicePaths {
@@ -94,7 +110,13 @@ export async function checkClaudePlusPlusUpdate(
   const includePrerelease = config.claudePlusPlus.updateChannel === "prerelease";
   let check: ClaudePlusPlusUpdateCheck;
   try {
-    const releases = await (options.requestReleases ?? requestReleases)(repo);
+    const loadReleases = options.requestReleases ??
+      ((repo: string) => requestReleases(
+        repo,
+        options.request ?? fetch,
+        options.timer ?? defaultProductUpdateTimer,
+      ));
+    const releases = await loadReleases(repo);
     const release = releases.find((candidate) => !candidate.draft &&
       (includePrerelease || !candidate.prerelease));
     const latestVersion = normalizeVersion(release?.tag_name);
@@ -118,9 +140,13 @@ export async function checkClaudePlusPlusUpdate(
       error: error instanceof Error ? error.message : String(error),
     };
   }
-  mutateRuntimeConfig(options.configFile, (next) => {
-    next.claudePlusPlus.updateCheck = check;
-  });
+  const persistence = (options.persist ?? mutateRuntimeConfigAdvisory)(
+    options.configFile,
+    (config) => { config.claudePlusPlus.updateCheck = check; },
+  );
+  if (persistence.status !== "persisted") {
+    options.onIssue?.(`Claude++ update cache ${persistence.status}`);
+  }
   return check;
 }
 
@@ -182,21 +208,28 @@ function normalizeVersion(tag: unknown): string | null {
   return tag.replace(/^v/, "");
 }
 
-async function requestReleases(repo: string): Promise<GitHubReleaseView[]> {
+async function requestReleases(
+  repo: string,
+  request = fetch,
+  timer: ProductUpdateTimer = defaultProductUpdateTimer,
+): Promise<GitHubReleaseView[]> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = timer.set(() => controller.abort(), 8_000);
   try {
-    const response = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=20`, {
-      headers: {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": `claude-plusplus/${CLAUDE_PLUSPLUS_VERSION}`,
+    const response = await request(
+      `https://api.github.com/repos/${repo}/releases?per_page=20`,
+      {
+        headers: {
+          "Accept": "application/vnd.github+json",
+          "User-Agent": `claude-plusplus/${CLAUDE_PLUSPLUS_VERSION}`,
+        },
+        signal: controller.signal,
       },
-      signal: controller.signal,
-    });
+    );
     if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
     return await response.json() as GitHubReleaseView[];
   } finally {
-    clearTimeout(timeout);
+    timer.clear(timeout);
   }
 }
 
