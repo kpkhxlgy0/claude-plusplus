@@ -180,7 +180,14 @@ export function createClaudeSettingsShellAdapter(
       publishVisibility();
       return;
     }
-    if (shell?.dialog === found.dialog) {
+    if (
+      shell?.dialog === found.dialog &&
+      shell.nav === found.nav &&
+      shell.navHost === found.navHost &&
+      shell.nativeButton === found.nativeButton &&
+      shell.content === found.content &&
+      groupElements.every((element) => found.dialog.contains(element))
+    ) {
       syncNavigation();
       syncNavigationActiveState();
       publishVisibility();
@@ -204,6 +211,7 @@ export function createClaudeSettingsShellAdapter(
 
   function syncNavigation(): void {
     if (!shell) return;
+    const currentShell = shell;
     const desiredKey = groups.map((group) => [
       group.id,
       group.title,
@@ -214,9 +222,11 @@ export function createClaudeSettingsShellAdapter(
     ].join("\n")).join("\n---\n");
     const renderedGroupCount = groups.filter((group) => group.items.length > 0).length;
     const hadAttachedNavigation = groupElements.length > 0 &&
-      groupElements.every((element) => shell?.navHost.contains(element));
+      groupElements.every((element) =>
+        currentShell.dialog.contains(element) && currentShell.navHost.contains(element));
     const attached = groupElements.length === renderedGroupCount &&
-      groupElements.every((element) => shell?.navHost.contains(element));
+      groupElements.every((element) =>
+        currentShell.dialog.contains(element) && currentShell.navHost.contains(element));
     if (navigationKey === desiredKey && attached) return;
 
     removeNavigationGroups();

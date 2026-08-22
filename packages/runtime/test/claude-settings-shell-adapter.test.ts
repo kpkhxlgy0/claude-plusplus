@@ -180,6 +180,27 @@ test("reports navigation mount state only after attached groups are created or r
   adapter.stop();
 });
 
+test("recovers navigation remounted inside the same visible dialog without a visibility transition", () => {
+  const fixture = settingsFixture();
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  const mounts: boolean[] = [];
+  const states: boolean[] = [];
+  adapter.setNavigationMountListener((visible) => mounts.push(visible));
+  adapter.start();
+  adapter.setVisibilityListener((visible) => states.push(visible));
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  assert.deepEqual(mounts, [true]);
+  assert.deepEqual(states, [true]);
+
+  fixture.remountSettingsNavigation();
+  fixture.flushMutation();
+
+  assert.equal(fixture.countButtons("config"), 1);
+  assert.deepEqual(mounts, [true, true]);
+  assert.deepEqual(states, [true]);
+  adapter.stop();
+});
+
 test("same-shell class observation does not self-reschedule", () => {
   const fixture = settingsFixture();
   const adapter = createClaudeSettingsShellAdapter(fixture.environment);

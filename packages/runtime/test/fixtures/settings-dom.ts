@@ -304,11 +304,8 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
   let dialogWidth = options.width ?? 800;
   let dialogHeight = options.height ?? 600;
 
-  const mount = (): void => {
-    dialog = document.createElement("div");
-    dialog.setAttribute("role", "dialog");
-    dialog.setAttribute("data-cds", "settings-dialog");
-    nav = document.createElement("nav");
+  const createNavigation = (): MiniElement => {
+    const nextNav = document.createElement("nav");
     const navBody = document.createElement("div");
     const nativeList = document.createElement("ul");
     generalButton = document.createElement("button");
@@ -326,7 +323,16 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     ].join(" ");
     nativeList.append(generalButton, claudeCodeButton);
     navBody.append(nativeList);
-    nav.append(navBody);
+    nextNav.append(navBody);
+    nav = nextNav;
+    return nextNav;
+  };
+
+  const mount = (): void => {
+    dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("data-cds", "settings-dialog");
+    createNavigation();
     content = document.createElement("div");
     nativeHeader = document.createElement("header");
     nativeHeader.textContent = "Native heading";
@@ -450,6 +456,10 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     },
     removeInjectedSettingsGroups(): void {
       for (const group of document.querySelectorAll("[data-claudepp-settings-group]")) group.remove();
+    },
+    remountSettingsNavigation(): void {
+      nav.remove();
+      dialog.appendChild(createNavigation());
     },
     remountSettingsShell(): void {
       dialog.remove();
