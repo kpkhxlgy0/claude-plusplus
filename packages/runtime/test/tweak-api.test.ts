@@ -164,6 +164,43 @@ test("concurrent Main API disposal shares one in-flight cleanup promise", async 
   }
 });
 
+test("quit disposal flushes storage and starts later resources while MCP disposal is pending", () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-desktop-api-quit-disposal-"));
+  try {
+    const calls: string[] = [];
+    const neverSettles = new Promise<void>(() => {});
+    const desktopMcpService = new FakeDesktopMcpService(calls, {
+      mcpDisposeGate: neverSettles,
+    });
+    const lease = createMainTweakApiLease({
+      manifest: manifest(["mcp"]),
+      userRoot: root,
+      log,
+      ipc: mainIpcBridge(calls),
+      startupEnvironment: initializeStartupEnvironment({ userRoot: root, env: {}, log }),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
+    });
+    lease.api.ipc.on("ready", () => {});
+    lease.api.storage.set("flushed", true);
+
+    assert.ok(lease.disposeForQuit);
+    lease.disposeForQuit();
+    lease.disposeForQuit();
+
+    assert.deepEqual(calls, [
+      "dispose-mcp:com.example.api",
+      "dispose-ipc",
+    ]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(root, "storage", "com.example.api.json"), "utf8")),
+      { flushed: true },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Main Desktop capability disposal remains idempotent after Tweak start throws", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-desktop-api-failed-start-"));
   try {

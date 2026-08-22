@@ -126,19 +126,10 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
     broadcastRendererReload: (reason) => broadcastRendererReload(deps.electron, reason),
     log: (message) => log.info(message),
   });
-  const activeReloads = new Set<Promise<void>>();
   const reload = manager.reload.bind(manager);
   manager.reload = (reason): Promise<void> => {
     if (shutdownRequested) return Promise.resolve();
-    const activeReload = reload(reason);
-    activeReloads.add(activeReload);
-    void activeReload.finally(() => activeReloads.delete(activeReload)).catch(() => {});
-    return activeReload;
-  };
-  const drainReloads = async (): Promise<void> => {
-    while (activeReloads.size > 0) {
-      await Promise.allSettled([...activeReloads]);
-    }
+    return reload(reason);
   };
   const disposeManagementIpc = installManagementIpc({
     electron: deps.electron,
@@ -164,46 +155,32 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
   deps.electron.app.on("session-created", (session) => register(session));
   deps.electron.app.on("ready", () => register(deps.electron.session.defaultSession));
   let stopWatching: () => Promise<void> = async () => {};
-  let startupPromise = Promise.resolve();
-  let shutdownPromise: Promise<void> | undefined;
-  let quitAllowed = false;
-  const runShutdownStep = async (
+  const runQuitCleanupStep = (
     label: string,
     cleanup: () => void | Promise<void>,
-  ): Promise<void> => {
+  ): void => {
     try {
-      await cleanup();
+      const result = cleanup();
+      void Promise.resolve(result).catch((error) => {
+        log.warn(`${label} failed during quit: ${errorMessage(error)}`);
+      });
     } catch (error) {
-      log.warn(`${label} failed during shutdown: ${errorMessage(error)}`);
+      log.warn(`${label} failed during quit: ${errorMessage(error)}`);
     }
   };
-  const shutdown = async (): Promise<void> => {
-    await runShutdownStep("Tweak watcher disposal", () => stopWatching());
-    await runShutdownStep("Main Tweak startup", () => startupPromise);
-    await runShutdownStep("Tweak reload drain", () => drainReloads());
-    await runShutdownStep("Main Tweak disposal", () => lifecycle.stopAll());
-    await runShutdownStep("Desktop MCP service disposal", () => deps.desktopMcpService.dispose());
-    await runShutdownStep("Management IPC disposal", () => disposeManagementIpc());
-  };
-  deps.electron.app.on("will-quit", (event) => {
-    if (quitAllowed) return;
-    event.preventDefault();
+  deps.electron.app.on("will-quit", () => {
+    if (shutdownRequested) return;
     shutdownRequested = true;
-    if (shutdownPromise) return;
-    shutdownPromise = shutdown().then(() => {
-      quitAllowed = true;
-      deps.electron.app.quit();
-    });
-    void shutdownPromise.catch((error) => {
-      log.warn(`Runtime shutdown coordinator failed: ${errorMessage(error)}`);
-    });
+    runQuitCleanupStep("Main Tweak disposal", () => lifecycle.stopAllForQuit());
+    runQuitCleanupStep("Tweak watcher disposal", () => stopWatching());
+    runQuitCleanupStep("Desktop MCP service disposal", () => deps.desktopMcpService.dispose());
+    runQuitCleanupStep("Management IPC disposal", () => disposeManagementIpc());
   });
   await deps.electron.app.whenReady();
   if (shutdownRequested) return;
   register(deps.electron.session.defaultSession);
 
-  startupPromise = startMainTweaks(loadMainTweaks(tweaks, deps.userRoot, log));
-  await startupPromise;
+  await startMainTweaks(loadMainTweaks(tweaks, deps.userRoot, log));
   if (shutdownRequested) return;
   stopWatching = process.versions.electron
     ? manager.watch(tweaks)

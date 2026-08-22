@@ -79,6 +79,44 @@ test("stops Tweaks and disposes their leases in reverse order", async () => {
   ]);
 });
 
+test("quit cleanup starts every stop and lease disposal without awaiting pending hooks", async () => {
+  const calls: string[] = [];
+  const lifecycle = new TweakLifecycle(() => {});
+  const neverSettles = new Promise<void>(() => {});
+  const tweaks = [
+    runnable("com.example.one", {
+      start() { calls.push("start-one"); },
+      stop() { calls.push("stop-one"); },
+    }),
+    runnable("com.example.two", {
+      start() { calls.push("start-two"); },
+      stop() {
+        calls.push("stop-two");
+        return neverSettles;
+      },
+    }),
+  ];
+
+  await lifecycle.startAll(tweaks, (value) => ({
+    ...leaseFor(value, calls, `dispose-${value.id}`),
+    disposeForQuit() {
+      calls.push(`dispose-for-quit-${value.id}`);
+    },
+  }));
+  lifecycle.stopAllForQuit();
+
+  assert.deepEqual(calls, [
+    "start-one",
+    "start-two",
+    "stop-two",
+    "dispose-for-quit-com.example.two",
+    "stop-one",
+    "dispose-for-quit-com.example.one",
+  ]);
+  await lifecycle.stopAll();
+  assert.equal(calls.length, 6);
+});
+
 test("scope both receives independent API objects in Main and Renderer", async () => {
   const seen: TweakApi[] = [];
   const tweak = runnable("com.example.both", {

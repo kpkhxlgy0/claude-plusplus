@@ -65,7 +65,29 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
     ? options.desktopMcpService.createSessionTitlesApiLease()
     : undefined;
   const claude = sessionTitles ? { sessionTitles: sessionTitles.api } : undefined;
+  const createResourceDisposer = (dispose: () => void | Promise<void>): (() => Promise<void>) => {
+    let promise: Promise<void> | undefined;
+    return (): Promise<void> => {
+      if (!promise) {
+        try {
+          promise = Promise.resolve(dispose());
+        } catch (error) {
+          promise = Promise.reject(error);
+        }
+      }
+      return promise;
+    };
+  };
+  const resources = [
+    ["Desktop MCP lease", createResourceDisposer(() => mcp?.dispose())],
+    ["session title lease", createResourceDisposer(() => sessionTitles?.dispose())],
+    ["Claude Code settings lease", createResourceDisposer(() => claudeCodeSettings?.dispose())],
+    ["startup environment lease", createResourceDisposer(() => startupEnvironment?.dispose())],
+    ["IPC lease", createResourceDisposer(() => ipc.dispose())],
+    ["storage", createResourceDisposer(() => storage.dispose())],
+  ] as const;
   let disposalPromise: Promise<void> | undefined;
+  let quitDisposalStarted = false;
   const disposeResources = async (): Promise<void> => {
     const errors: unknown[] = [];
     const attempt = async (dispose: () => void | Promise<void>): Promise<void> => {
@@ -75,12 +97,7 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
         errors.push(error);
       }
     };
-    await attempt(() => mcp?.dispose());
-    await attempt(() => sessionTitles?.dispose());
-    await attempt(() => claudeCodeSettings?.dispose());
-    await attempt(() => startupEnvironment?.dispose());
-    await attempt(() => ipc.dispose());
-    await attempt(() => storage.dispose());
+    for (const [, dispose] of resources) await attempt(dispose);
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, "Main Tweak API disposal failed");
   };
@@ -100,6 +117,17 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
     dispose(): Promise<void> {
       disposalPromise ??= disposeResources();
       return disposalPromise;
+    },
+    disposeForQuit(): void {
+      if (quitDisposalStarted) return;
+      quitDisposalStarted = true;
+      for (const [label, dispose] of resources) {
+        void dispose().catch((error) => {
+          options.log.warn(
+            `${options.manifest.id} ${label} failed to dispose during quit: ${errorMessage(error)}`,
+          );
+        });
+      }
     },
   };
 }
@@ -200,4 +228,8 @@ function guardFilesystem(fs: TweakFs, manifest: TweakManifest): TweakFs {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

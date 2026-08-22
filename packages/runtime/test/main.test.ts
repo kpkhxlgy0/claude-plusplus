@@ -638,7 +638,47 @@ test("app quit revokes Main Tweak leases before disposing the shared Desktop ser
   }
 });
 
-test("quit waits for idempotent cleanup when readiness is still pending", async () => {
+test("will-quit is not blocked by a Desktop MCP disposal that never settles", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-nonblocking-quit-"));
+  try {
+    const calls: string[] = [];
+    const neverSettles = new Promise<void>(() => {});
+    const desktopMcpService = new FakeDesktopMcpService(calls, undefined, neverSettles);
+    let willQuit: FakeWillQuitListener | undefined;
+    let preventDefaultCount = 0;
+    let recursiveQuitCount = 0;
+    const electron = fakeElectron(
+      fakeSession(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (listener) => { willQuit = listener; },
+    );
+    electron.app.quit = () => { recursiveQuitCount += 1; };
+
+    await bootstrapRuntime({
+      electron,
+      userRoot: root,
+      preloadPath: "C:\\runtime\\preload.js",
+      startupEnvironment: startupEnvironment(root),
+      claudeCodeSettings: codeSettings(root),
+      desktopMcpService,
+    });
+    assert.ok(willQuit);
+    willQuit({ preventDefault: () => { preventDefaultCount += 1; } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(preventDefaultCount, 0);
+    assert.equal(recursiveQuitCount, 0);
+    assert.deepEqual(calls, ["dispose-service"]);
+    assert.equal(desktopMcpService.disposeCount, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("quit starts idempotent cleanup without preventing exit while readiness is pending", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-early-quit-"));
   let resolveReady: (() => void) | undefined;
   let resolveServiceDispose: (() => void) | undefined;
@@ -695,18 +735,13 @@ test("quit waits for idempotent cleanup when readiness is still pending", async 
     willQuit(duplicateEvent);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    assert.deepEqual(calls, ["prevent-first", "prevent-duplicate", "dispose-service"]);
+    assert.deepEqual(calls, ["dispose-service"]);
     assert.equal(desktopMcpService.disposeCount, 1);
 
     resolveServiceDispose?.();
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    assert.deepEqual(calls, [
-      "prevent-first",
-      "prevent-duplicate",
-      "dispose-service",
-      "quit",
-    ]);
+    assert.deepEqual(calls, ["dispose-service"]);
     resolveReady?.();
     await bootstrapPromise;
     assert.deepEqual(desktopMcpService.created, []);
@@ -718,7 +753,7 @@ test("quit waits for idempotent cleanup when readiness is still pending", async 
   }
 });
 
-test("quit continues later cleanup when shared Desktop service disposal rejects", async () => {
+test("quit continues synchronous cleanup when shared Desktop service disposal rejects", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-rejected-quit-cleanup-"));
   try {
     const calls: string[] = [];
@@ -757,10 +792,8 @@ test("quit continues later cleanup when shared Desktop service disposal rejects"
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.deepEqual(calls, [
-      "prevent",
       "dispose-service",
       "dispose-management",
-      "quit",
     ]);
     assert.equal(desktopMcpService.disposeCount, 1);
   } finally {
@@ -768,7 +801,7 @@ test("quit continues later cleanup when shared Desktop service disposal rejects"
   }
 });
 
-test("quit drains a pending reload replacement start before disposing the shared service", async () => {
+test("quit starts cleanup without draining a pending reload replacement", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-reload-quit-"));
   let resolveReplacementStart: (() => void) | undefined;
   let reloadPromise: Promise<unknown> | undefined;
@@ -831,7 +864,13 @@ test("quit drains a pending reload replacement start before disposing the shared
 
     const registration = "register:com.example.reload-quit:claudepp_reload_quit";
     const leaseDisposal = "dispose-mcp:com.example.reload-quit";
-    assert.deepEqual(calls, [registration, leaseDisposal, registration, "prevent"]);
+    assert.deepEqual(calls, [
+      registration,
+      leaseDisposal,
+      registration,
+      leaseDisposal,
+      "dispose-service",
+    ]);
 
     resolveReplacementStart?.();
     await reloadPromise;
@@ -841,10 +880,8 @@ test("quit drains a pending reload replacement start before disposing the shared
       registration,
       leaseDisposal,
       registration,
-      "prevent",
       leaseDisposal,
       "dispose-service",
-      "quit",
     ]);
     assert.equal(desktopMcpService.disposeCount, 1);
   } finally {
