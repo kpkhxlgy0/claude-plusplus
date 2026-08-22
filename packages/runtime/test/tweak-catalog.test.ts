@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { RuntimeConfig } from "../src/config.ts";
+import type { RuntimeConfig, TweakUpdateCheck } from "../src/config.ts";
 import { listInstalledTweaks } from "../src/tweak-catalog.ts";
 
 test("lists readable manifests even when disabled or missing an entry", () => {
@@ -50,6 +50,32 @@ test("keeps an incompatible readable manifest visible with its compatibility iss
   }
 });
 
+test("attaches cached updates only to the matching manifest identity", () => {
+  const root = mkdtempSync(join(tmpdir(), "claudepp-catalog-identity-"));
+  try {
+    writeTweak(root, "enabled", "com.example.enabled", true);
+    writeTweak(root, "broken", "com.example.broken", false);
+    const config = configWithDisabled();
+    config.tweakUpdateChecks["com.example.enabled"] = cachedTweakCheck({
+      repo: "example/tweak",
+      currentVersion: "0.2.0",
+      latestVersion: "0.3.0",
+    });
+    config.tweakUpdateChecks["com.example.broken"] = cachedTweakCheck({
+      repo: "example/old",
+      currentVersion: "0.1.0",
+      latestVersion: "9.9.9",
+    });
+    const listed = listInstalledTweaks({ tweaksRoot: root, config });
+    const enabled = listed.find((item) => item.manifest.id === "com.example.enabled");
+    const broken = listed.find((item) => item.manifest.id === "com.example.broken");
+    assert.equal(enabled?.update?.latestVersion, "0.3.0");
+    assert.equal(broken?.update, null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function writeTweak(
   root: string,
   name: string,
@@ -81,5 +107,21 @@ function configWithDisabled(id?: string): RuntimeConfig {
     },
     tweaks: id ? { [id]: { enabled: false } } : {},
     tweakUpdateChecks: {},
+  };
+}
+
+function cachedTweakCheck(options: {
+  repo: string;
+  currentVersion: string;
+  latestVersion: string;
+}): TweakUpdateCheck {
+  return {
+    checkedAt: "2026-08-22T00:00:00.000Z",
+    repo: options.repo,
+    currentVersion: options.currentVersion,
+    latestVersion: options.latestVersion,
+    latestTag: `v${options.latestVersion}`,
+    releaseUrl: `https://github.com/${options.repo}/releases/tag/v${options.latestVersion}`,
+    updateAvailable: true,
   };
 }

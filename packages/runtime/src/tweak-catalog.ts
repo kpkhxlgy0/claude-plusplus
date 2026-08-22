@@ -33,11 +33,17 @@ export function listInstalledTweaks(options: ListInstalledTweaksOptions): Listed
         options.onIssue,
       );
       if (!candidate) continue;
+      const cached = options.config.tweakUpdateChecks[candidate.manifest.id];
+      const update = cached &&
+        cached.repo === candidate.manifest.githubRepo &&
+        cached.currentVersion === candidate.manifest.version
+        ? cached
+        : null;
       listed.push({
         ...candidate,
         enabled: !options.config.claudePlusPlus.safeMode &&
           isTweakEnabled(options.config, candidate.manifest.id),
-        update: options.config.tweakUpdateChecks[candidate.manifest.id] ?? null,
+        update,
       });
     } catch (error) {
       options.onIssue?.(`${name}: ${errorMessage(error)}`);

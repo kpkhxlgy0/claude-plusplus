@@ -1,6 +1,7 @@
 import type { TweakManifest } from "@claude-plusplus/sdk";
+import { resolve } from "node:path";
 import {
-  mutateRuntimeConfig,
+  mutateRuntimeConfigAdvisory,
   readRuntimeConfig,
   type TweakUpdateCheck,
 } from "./config.js";
@@ -14,13 +15,68 @@ export type ReleaseRequest = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export interface ReleaseTimerHandle {
+  unref?(): void;
+}
+
+export interface ReleaseTimer {
+  set(callback: () => void, delay: number): ReleaseTimerHandle;
+  clear(handle: ReleaseTimerHandle): void;
+}
+
+const defaultReleaseTimer: ReleaseTimer = {
+  set: (callback, delay) => setTimeout(callback, delay) as ReleaseTimerHandle,
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+export interface TweakUpdateCheckerDeps {
+  request?: ReleaseRequest;
+  now?: () => Date;
+  timer?: ReleaseTimer;
+  createAbortController?: () => AbortController;
+  persist?: typeof mutateRuntimeConfigAdvisory;
+  onIssue?: (message: string) => void;
+}
+
+export interface TweakUpdateChecker {
+  ensure(options: EnsureTweakUpdateCheckOptions): Promise<TweakUpdateCheck>;
+}
+
+export interface EnsureTweakUpdateCheckOptions {
+  configFile: string;
+  manifest: TweakManifest;
+}
+
+export function tweakUpdateIdentity(configFile: string, manifest: TweakManifest): string {
+  return [resolve(configFile), manifest.id, manifest.githubRepo, manifest.version].join("\u0000");
+}
+
+function isFreshMatchingCheck(
+  cached: TweakUpdateCheck | undefined,
+  manifest: TweakManifest,
+  now: Date,
+): cached is TweakUpdateCheck {
+  return !!cached &&
+    cached.repo === manifest.githubRepo &&
+    cached.currentVersion === manifest.version &&
+    now.getTime() - Date.parse(cached.checkedAt) < TWEAK_UPDATE_INTERVAL_MS;
+}
+
 export async function checkTweakRelease(
   tweak: { manifest: TweakManifest },
   request: ReleaseRequest = fetch,
   now = new Date(),
+  timer: ReleaseTimer = defaultReleaseTimer,
+  createAbortController: () => AbortController = () => new AbortController(),
 ): Promise<TweakUpdateCheck> {
   const { manifest } = tweak;
-  const release = await fetchLatestRelease(manifest.githubRepo, manifest.version, request);
+  const release = await fetchLatestRelease(
+    manifest.githubRepo,
+    manifest.version,
+    request,
+    timer,
+    createAbortController,
+  );
   const latestVersion = release.latestTag ? normalizeVersion(release.latestTag) : null;
   return {
     checkedAt: now.toISOString(),
@@ -36,36 +92,53 @@ export async function checkTweakRelease(
   };
 }
 
-export interface EnsureTweakUpdateCheckOptions {
-  configFile: string;
-  manifest: TweakManifest;
-  request?: ReleaseRequest;
-  now?: Date;
+export function createTweakUpdateChecker(
+  deps: TweakUpdateCheckerDeps = {},
+): TweakUpdateChecker {
+  const inFlight = new Map<string, Promise<TweakUpdateCheck>>();
+  return {
+    ensure(options) {
+      const now = (deps.now ?? (() => new Date()))();
+      const cached = readRuntimeConfig(options.configFile)
+        .tweakUpdateChecks[options.manifest.id];
+      if (isFreshMatchingCheck(cached, options.manifest, now)) return Promise.resolve(cached);
+
+      const identity = tweakUpdateIdentity(options.configFile, options.manifest);
+      const active = inFlight.get(identity);
+      if (active) return active;
+      const request = checkTweakRelease(
+        { manifest: options.manifest },
+        deps.request ?? fetch,
+        now,
+        deps.timer ?? defaultReleaseTimer,
+        deps.createAbortController ?? (() => new AbortController()),
+      ).then((check) => {
+        const result = (deps.persist ?? mutateRuntimeConfigAdvisory)(
+          options.configFile,
+          (config) => {
+            config.tweakUpdateChecks[options.manifest.id] = check;
+          },
+        );
+        if (result.status !== "persisted") {
+          deps.onIssue?.(`Tweak update cache ${result.status}: ${options.manifest.id}`);
+        }
+        return check;
+      });
+      const pending: Promise<TweakUpdateCheck> = request.finally(() => {
+        if (inFlight.get(identity) === pending) inFlight.delete(identity);
+      });
+      inFlight.set(identity, pending);
+      return pending;
+    },
+  };
 }
 
-export async function ensureTweakUpdateCheck(
+const productionTweakUpdateChecker = createTweakUpdateChecker();
+
+export function ensureTweakUpdateCheck(
   options: EnsureTweakUpdateCheckOptions,
 ): Promise<TweakUpdateCheck> {
-  const now = options.now ?? new Date();
-  const config = readRuntimeConfig(options.configFile);
-  const cached = config.tweakUpdateChecks[options.manifest.id];
-  if (
-    cached &&
-    cached.repo === options.manifest.githubRepo &&
-    cached.currentVersion === options.manifest.version &&
-    now.getTime() - Date.parse(cached.checkedAt) < TWEAK_UPDATE_INTERVAL_MS
-  ) {
-    return cached;
-  }
-  const check = await checkTweakRelease(
-    { manifest: options.manifest },
-    options.request,
-    now,
-  );
-  mutateRuntimeConfig(options.configFile, (next) => {
-    next.tweakUpdateChecks[options.manifest.id] = check;
-  });
-  return check;
+  return productionTweakUpdateChecker.ensure(options);
 }
 
 interface ReleaseResult {
@@ -78,9 +151,11 @@ async function fetchLatestRelease(
   repo: string,
   currentVersion: string,
   request: ReleaseRequest,
+  timer: ReleaseTimer,
+  createAbortController: () => AbortController,
 ): Promise<ReleaseResult> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const controller = createAbortController();
+  const timeout = timer.set(() => controller.abort(), REQUEST_TIMEOUT_MS);
   timeout.unref?.();
   try {
     const response = await request(`https://api.github.com/repos/${repo}/releases/latest`, {
@@ -115,7 +190,7 @@ async function fetchLatestRelease(
       error: errorMessage(error),
     };
   } finally {
-    clearTimeout(timeout);
+    timer.clear(timeout);
   }
 }
 
