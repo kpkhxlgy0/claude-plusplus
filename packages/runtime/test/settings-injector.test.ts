@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach, beforeEach } from "node:test";
 import type { TweakManifest } from "@claude-plusplus/sdk";
 import type { ClaudePlusPlusUpdateCheck } from "../src/config.ts";
+import { clearStoreCache } from "../src/settings/store-page.ts";
+import type {
+  TweakStoreEntryView,
+  TweakStoreRegistryView,
+} from "../src/tweak-store.ts";
 import type { ClaudePlusPlusConfigView } from "../src/update-service.ts";
 import type { WatcherHealth } from "../src/watcher-health.ts";
 import {
@@ -11,6 +16,27 @@ import {
   startSettingsInjector,
 } from "../src/preload/settings-injector.ts";
 import { classTokens, settingsFixture } from "./fixtures/settings-dom.ts";
+
+const emptyStoreRegistry: TweakStoreRegistryView = {
+  schemaVersion: 1,
+  sourceUrl: "https://example.com/store.json",
+  fetchedAt: "2026-08-22T00:00:00.000Z",
+  entries: [],
+};
+
+async function baselineManagementBridge(channel: string): Promise<unknown> {
+  if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
+  throw new Error(`unexpected ${channel}`);
+}
+
+beforeEach(() => {
+  clearStoreCache();
+  setSettingsManagementBridge(baselineManagementBridge);
+});
+afterEach(() => {
+  clearStoreCache();
+  setSettingsManagementBridge(baselineManagementBridge);
+});
 
 test("registers a namespaced page, isolates native content, and restores it from native navigation", () => {
   const fixture = settingsFixture();
@@ -204,13 +230,43 @@ test("contains one page render failure and still opens another registered page",
   clearSettingsPages();
 });
 
-test("a hidden navigation mount defers product metadata until first visibility", async () => {
+test("an initially visible navigation mount starts product and Store before injector returns", async () => {
+  const fixture = settingsFixture();
+  const product = deferred<ClaudePlusPlusUpdateCheck>();
+  const store = deferred<TweakStoreRegistryView>();
+  const calls: string[] = [];
+  setSettingsManagementBridge(async (channel) => {
+    calls.push(channel);
+    if (channel === "claudepp:check-claudepp-update") {
+      assert.ok(fixture.findPageButton("claudepp:config"));
+      return await product.promise;
+    }
+    if (channel === "claudepp:get-tweak-store") return await store.promise;
+    throw new Error(`unexpected ${channel}`);
+  });
+
+  startSettingsInjector(fixture.environment);
+
+  assert.ok(fixture.findPageButton("claudepp:config"));
+  assert.deepEqual(calls, [
+    "claudepp:check-claudepp-update",
+    "claudepp:get-tweak-store",
+  ]);
+  product.resolve(currentProductCheck());
+  store.resolve(storeRegistry([installedStoreEntry("com.example.update", "0.1.0", "0.2.0")]));
+  await flushPromises();
+  assert.equal(storeBadgeText(fixture.environment.document), "1");
+});
+
+test("a hidden navigation mount defers product metadata and Store warm until first visibility", async () => {
   const fixture = settingsFixture({ display: "none" });
   const product = deferred<ClaudePlusPlusUpdateCheck>();
+  const store = deferred<TweakStoreRegistryView>();
   const calls: string[] = [];
   setSettingsManagementBridge(async (channel) => {
     calls.push(channel);
     if (channel === "claudepp:check-claudepp-update") return await product.promise;
+    if (channel === "claudepp:get-tweak-store") return await store.promise;
     throw new Error(`unexpected ${channel}`);
   });
   startSettingsInjector(fixture.environment);
@@ -219,11 +275,45 @@ test("a hidden navigation mount defers product metadata until first visibility",
 
   fixture.setDialogStyle({ display: "block", visibility: "visible" });
   fixture.flushAttributeMutation();
-  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+  assert.deepEqual(calls, [
+    "claudepp:check-claudepp-update",
+    "claudepp:get-tweak-store",
+  ]);
   assert.ok(fixture.findPageButton("claudepp:config"));
   product.resolve(availableProductCheck());
+  store.resolve(emptyStoreRegistry);
   await flushPromises();
   assert.equal(fixture.countGroupActions("claudepp-update"), 1);
+});
+
+test("hidden to visible transitions reuse the Renderer Store cache", async () => {
+  const fixture = settingsFixture({ display: "none" });
+  let productRequests = 0;
+  let storeRequests = 0;
+  setSettingsManagementBridge(async (channel) => {
+    if (channel === "claudepp:check-claudepp-update") {
+      productRequests += 1;
+      return currentProductCheck();
+    }
+    if (channel === "claudepp:get-tweak-store") {
+      storeRequests += 1;
+      return emptyStoreRegistry;
+    }
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fixture.environment);
+
+  fixture.setDialogStyle({ display: "block", visibility: "visible" });
+  fixture.flushAttributeMutation();
+  await flushPromises();
+  fixture.setDialogStyle({ display: "none", visibility: "visible" });
+  fixture.flushAttributeMutation();
+  fixture.setDialogStyle({ display: "block", visibility: "visible" });
+  fixture.flushAttributeMutation();
+  await flushPromises();
+
+  assert.equal(productRequests, 1);
+  assert.equal(storeRequests, 1);
 });
 
 test("a direct visible shell replacement checks product metadata for the new mount", async () => {
@@ -232,16 +322,21 @@ test("a direct visible shell replacement checks product metadata for the new mou
   setSettingsManagementBridge(async (channel) => {
     calls.push(channel);
     if (channel === "claudepp:check-claudepp-update") return currentProductCheck();
+    if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
     throw new Error(`unexpected ${channel}`);
   });
   startSettingsInjector(fixture.environment);
   await flushPromises();
-  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+  assert.deepEqual(calls, [
+    "claudepp:check-claudepp-update",
+    "claudepp:get-tweak-store",
+  ]);
 
   fixture.replaceVisibleSettingsShell();
   fixture.flushMutation();
   assert.deepEqual(calls, [
     "claudepp:check-claudepp-update",
+    "claudepp:get-tweak-store",
     "claudepp:check-claudepp-update",
   ]);
 });
@@ -252,6 +347,7 @@ test("same-shell observer and visibility noise does not repeat a mounted product
   setSettingsManagementBridge(async (channel) => {
     calls.push(channel);
     if (channel === "claudepp:check-claudepp-update") return currentProductCheck();
+    if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
     throw new Error(`unexpected ${channel}`);
   });
   startSettingsInjector(fixture.environment);
@@ -265,7 +361,10 @@ test("same-shell observer and visibility noise does not repeat a mounted product
   fixture.flushResize();
   fixture.flushWindowResize();
 
-  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+  assert.deepEqual(calls, [
+    "claudepp:check-claudepp-update",
+    "claudepp:get-tweak-store",
+  ]);
   assert.ok(fixture.findPageButton("claudepp:config"));
 });
 
@@ -275,6 +374,7 @@ test("a recreated owned group checks only when that mount becomes visible", asyn
   setSettingsManagementBridge(async (channel) => {
     calls.push(channel);
     if (channel === "claudepp:check-claudepp-update") return currentProductCheck();
+    if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
     throw new Error(`unexpected ${channel}`);
   });
   startSettingsInjector(fixture.environment);
@@ -284,13 +384,17 @@ test("a recreated owned group checks only when that mount becomes visible", asyn
   fixture.flushAttributeMutation();
   fixture.removeInjectedSettingsGroups();
   fixture.flushMutation();
-  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+  assert.deepEqual(calls, [
+    "claudepp:check-claudepp-update",
+    "claudepp:get-tweak-store",
+  ]);
   assert.ok(fixture.findPageButton("claudepp:config"));
 
   fixture.setDialogStyle({ display: "block", visibility: "visible" });
   fixture.flushAttributeMutation();
   assert.deepEqual(calls, [
     "claudepp:check-claudepp-update",
+    "claudepp:get-tweak-store",
     "claudepp:check-claudepp-update",
   ]);
 });
@@ -299,6 +403,7 @@ test("an automatic product IPC rejection clears the action without removing navi
   const fixture = settingsFixture();
   let productCalls = 0;
   setSettingsManagementBridge(async (channel) => {
+    if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
     if (channel !== "claudepp:check-claudepp-update") throw new Error(`unexpected ${channel}`);
     productCalls += 1;
     if (productCalls === 1) return availableProductCheck();
@@ -323,10 +428,14 @@ test("an old document's automatic completion cannot publish into a replacement e
   setSettingsManagementBridge(async (channel) => {
     calls.push(channel);
     if (channel === "claudepp:check-claudepp-update") return await automaticA.promise;
+    if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
     throw new Error(`unexpected ${channel}`);
   });
   startSettingsInjector(fixtureA.environment);
-  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+  assert.deepEqual(calls, [
+    "claudepp:check-claudepp-update",
+    "claudepp:get-tweak-store",
+  ]);
 
   const fixtureB = settingsFixture({ display: "none" });
   setSettingsManagementBridge(async (channel) => {
@@ -339,7 +448,46 @@ test("an old document's automatic completion cannot publish into a replacement e
 
   assert.equal(fixtureA.countGroupActions("claudepp-update"), 0);
   assert.equal(fixtureB.countGroupActions("claudepp-update"), 0);
-  assert.deepEqual(calls, ["claudepp:check-claudepp-update"]);
+  assert.deepEqual(calls, [
+    "claudepp:check-claudepp-update",
+    "claudepp:get-tweak-store",
+  ]);
+});
+
+test("an old document Store completion cannot publish into a hidden replacement environment", async () => {
+  const fixtureA = settingsFixture();
+  const storeA = deferred<TweakStoreRegistryView>();
+  let storeRequests = 0;
+  setSettingsManagementBridge(async (channel) => {
+    if (channel === "claudepp:check-claudepp-update") return currentProductCheck();
+    if (channel === "claudepp:get-tweak-store") {
+      storeRequests += 1;
+      return await storeA.promise;
+    }
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fixtureA.environment);
+
+  const fixtureB = settingsFixture({ display: "none" });
+  setSettingsManagementBridge(async (channel) => {
+    if (channel === "claudepp:check-claudepp-update") return currentProductCheck();
+    if (channel === "claudepp:get-tweak-store") {
+      storeRequests += 1;
+      return emptyStoreRegistry;
+    }
+    throw new Error(`unexpected replacement call ${channel}`);
+  });
+  startSettingsInjector(fixtureB.environment);
+  storeA.resolve(storeRegistry([installedStoreEntry("com.example.old", "0.1.0", "0.2.0")]));
+  await flushPromises();
+
+  assert.equal(storeBadgeText(fixtureA.environment.document), null);
+  assert.equal(storeBadgeText(fixtureB.environment.document), null);
+  fixtureB.setDialogStyle({ display: "block", visibility: "visible" });
+  fixtureB.flushAttributeMutation();
+  await flushPromises();
+  assert.equal(storeRequests, 1);
+  assert.equal(storeBadgeText(fixtureB.environment.document), "1");
 });
 
 test("an old Config forced completion cannot publish or rerender after environment replacement", async () => {
@@ -356,6 +504,7 @@ test("an old Config forced completion cannot publish or rerender after environme
     }
     if (channel === "claudepp:get-config") return configView();
     if (channel === "claudepp:get-watcher-health") return absentWatcher();
+    if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
     throw new Error(`unexpected ${channel}`);
   });
   startSettingsInjector(fixtureA.environment);
@@ -425,52 +574,47 @@ test("automatic and forced product checks publish strictly in completion order",
 });
 
 test("the production Update action only opens its current release target", async () => {
-  const rejectingBridge = async (channel: string): Promise<unknown> => {
-    throw new Error(`Claude++ Settings management bridge is unavailable: ${channel}`);
-  };
-  try {
-    const calls: unknown[] = [];
-    const fixture = settingsFixture();
-    setSettingsManagementBridge(async (channel, ...args) => {
-      calls.push(channel, ...args);
-      if (channel === "claudepp:check-claudepp-update") return availableProductCheck();
-      if (channel === "claudepp:open-external") return undefined;
-      throw new Error(`unexpected ${channel}`);
-    });
-    startSettingsInjector(fixture.environment);
-    await flushPromises();
-    const beforeClick = calls.length;
-    fixture.click(fixture.groupAction("claudepp-update"));
-    await flushPromises();
-    assert.deepEqual(calls.slice(beforeClick), [
-      "claudepp:open-external",
-      "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.1",
-    ]);
-    assertNoUpdateSideEffects(calls);
+  const calls: unknown[] = [];
+  const fixture = settingsFixture();
+  setSettingsManagementBridge(async (channel, ...args) => {
+    calls.push(channel, ...args);
+    if (channel === "claudepp:check-claudepp-update") return availableProductCheck();
+    if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
+    if (channel === "claudepp:open-external") return undefined;
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fixture.environment);
+  await flushPromises();
+  const beforeClick = calls.length;
+  fixture.click(fixture.groupAction("claudepp-update"));
+  await flushPromises();
+  assert.deepEqual(calls.slice(beforeClick), [
+    "claudepp:open-external",
+    "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.1",
+  ]);
+  assertNoUpdateSideEffects(calls);
 
-    const fallbackCalls: unknown[] = [];
-    const fallbackFixture = settingsFixture();
-    setSettingsManagementBridge(async (channel, ...args) => {
-      fallbackCalls.push(channel, ...args);
-      if (channel === "claudepp:check-claudepp-update") {
-        return productCheck({ releaseUrl: null });
-      }
-      if (channel === "claudepp:open-external") return undefined;
-      throw new Error(`unexpected ${channel}`);
-    });
-    startSettingsInjector(fallbackFixture.environment);
-    await flushPromises();
-    const fallbackBeforeClick = fallbackCalls.length;
-    fallbackFixture.click(fallbackFixture.groupAction("claudepp-update"));
-    await flushPromises();
-    assert.deepEqual(fallbackCalls.slice(fallbackBeforeClick), [
-      "claudepp:open-external",
-      "https://github.com/kpkhxlgy0/claude-plusplus/releases",
-    ]);
-    assertNoUpdateSideEffects(fallbackCalls);
-  } finally {
-    setSettingsManagementBridge(rejectingBridge);
-  }
+  const fallbackCalls: unknown[] = [];
+  const fallbackFixture = settingsFixture();
+  setSettingsManagementBridge(async (channel, ...args) => {
+    fallbackCalls.push(channel, ...args);
+    if (channel === "claudepp:check-claudepp-update") {
+      return productCheck({ releaseUrl: null });
+    }
+    if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
+    if (channel === "claudepp:open-external") return undefined;
+    throw new Error(`unexpected ${channel}`);
+  });
+  startSettingsInjector(fallbackFixture.environment);
+  await flushPromises();
+  const fallbackBeforeClick = fallbackCalls.length;
+  fallbackFixture.click(fallbackFixture.groupAction("claudepp-update"));
+  await flushPromises();
+  assert.deepEqual(fallbackCalls.slice(fallbackBeforeClick), [
+    "claudepp:open-external",
+    "https://github.com/kpkhxlgy0/claude-plusplus/releases",
+  ]);
+  assertNoUpdateSideEffects(fallbackCalls);
 });
 
 function manifest(id: string): TweakManifest {
@@ -511,6 +655,45 @@ function currentProductCheck(): ClaudePlusPlusUpdateCheck {
   });
 }
 
+function storeRegistry(entries: TweakStoreEntryView[]): TweakStoreRegistryView {
+  return {
+    ...emptyStoreRegistry,
+    entries,
+  };
+}
+
+function installedStoreEntry(
+  id: string,
+  installed: string,
+  latest: string,
+): TweakStoreEntryView {
+  return {
+    id,
+    manifest: {
+      id,
+      name: id,
+      version: latest,
+      githubRepo: "example/settings",
+      description: `${id} description`,
+    },
+    repo: "example/settings",
+    approvedCommitSha: "1234567890abcdef1234567890abcdef12345678",
+    approvedAt: "2026-08-22T00:00:00.000Z",
+    approvedBy: "reviewer",
+    releaseUrl: `https://github.com/example/settings/releases/tag/v${latest}`,
+    reviewUrl: "https://github.com/example/settings/issues/1",
+    platform: { current: "win32", supported: ["win32"], compatible: true, reason: null },
+    runtime: { current: "0.3.0", required: null, compatible: true, reason: null },
+    installed: { version: installed, enabled: true },
+  };
+}
+
+function storeBadgeText(document: Document): string | null {
+  return document.querySelector<HTMLElement>(
+    '[data-claudepp-settings-badge="claudepp:store"]',
+  )?.textContent ?? null;
+}
+
 function configView(): ClaudePlusPlusConfigView {
   return {
     version: "0.3.0",
@@ -548,6 +731,7 @@ function productBridge(
     }
     if (channel === "claudepp:get-config") return configView();
     if (channel === "claudepp:get-watcher-health") return absentWatcher();
+    if (channel === "claudepp:get-tweak-store") return emptyStoreRegistry;
     throw new Error(`unexpected ${channel}`);
   };
 }

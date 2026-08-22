@@ -9,10 +9,13 @@ import {
   settingsSection,
 } from "./components.js";
 
-export interface StorePageContext {
-  root: HTMLElement;
+export interface StoreDataContext {
   invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
   setStoreUpdateCount(count: number): void;
+}
+
+export interface StorePageContext extends StoreDataContext {
+  root: HTMLElement;
   promptRepo(): string | null;
 }
 
@@ -41,7 +44,18 @@ export function clearStoreCache(): void {
   storePromise = null;
 }
 
-function getStore(context: StorePageContext, force: boolean): Promise<TweakStoreRegistryView> {
+export function countStoreUpdates(store: TweakStoreRegistryView): number {
+  return store.entries.filter((entry) =>
+    entry.installed && entry.installed.version !== entry.manifest.version).length;
+}
+
+export function warmTweakStore(context: StoreDataContext): void {
+  void getStore(context, false).then((store) => {
+    context.setStoreUpdateCount(countStoreUpdates(store));
+  });
+}
+
+function getStore(context: StoreDataContext, force: boolean): Promise<TweakStoreRegistryView> {
   if (!force && cachedStore) return Promise.resolve(cachedStore);
   if (!force && storePromise) return storePromise;
   const pending = context.invoke<TweakStoreRegistryView>("claudepp:get-tweak-store")
@@ -70,8 +84,7 @@ function renderStoreLoading(context: StorePageContext): void {
 function renderStore(context: StorePageContext, store: TweakStoreRegistryView): void {
   const document = context.root.ownerDocument;
   context.root.textContent = "";
-  currentStoreUpdateCount = store.entries.filter((entry) =>
-    entry.installed && entry.installed.version !== entry.manifest.version).length;
+  currentStoreUpdateCount = countStoreUpdates(store);
   context.setStoreUpdateCount(currentStoreUpdateCount);
   const section = settingsSection(document, "Reviewed Tweaks", storeToolbar(context));
   const source = document.createElement("div");
@@ -89,6 +102,8 @@ function renderStore(context: StorePageContext, store: TweakStoreRegistryView): 
 }
 
 function renderStoreError(context: StorePageContext, error: unknown): void {
+  currentStoreUpdateCount = 0;
+  context.setStoreUpdateCount(currentStoreUpdateCount);
   const document = context.root.ownerDocument;
   context.root.textContent = "";
   const section = settingsSection(document, "Reviewed Tweaks", storeToolbar(context));

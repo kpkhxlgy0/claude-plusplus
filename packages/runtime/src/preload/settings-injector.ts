@@ -16,7 +16,7 @@ import {
 } from "../settings/product-controller.js";
 import { renderTweaksPage } from "../settings/tweaks-page.js";
 import { renderConfigPage } from "../settings/config-page.js";
-import { renderStorePage } from "../settings/store-page.js";
+import { renderStorePage, warmTweakStore } from "../settings/store-page.js";
 import type { ClaudePlusPlusUpdateCheck } from "../config.js";
 
 export type SettingsInjectorEnvironment = SettingsShellEnvironment;
@@ -93,9 +93,17 @@ export function startSettingsInjector(
     });
     localController.start();
     localAdapter.setVisibilityListener((visible) => {
-      if (!visible || !productCheckPendingForMount) return;
-      productCheckPendingForMount = false;
-      startProductCheck();
+      if (!visible) return;
+      if (productCheckPendingForMount) {
+        productCheckPendingForMount = false;
+        startProductCheck();
+      }
+      void warmTweakStore({
+        invoke: managementInvokeTyped,
+        setStoreUpdateCount: (count) => {
+          if (isCurrent()) localController.setStoreUpdateCount(count);
+        },
+      });
     });
   } else {
     controller!.start();
