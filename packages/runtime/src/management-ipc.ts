@@ -49,6 +49,7 @@ export function installManagementIpc(deps: ManagementIpcDeps): () => void {
   const updatePaths = {
     sourceRoot: deps.sourceRoot,
     configFile: deps.configFile,
+    stateFile: join(deps.userRoot, "state.json"),
     selfUpdateStateFile,
   };
   const listTweaks = () => listInstalledTweaks({

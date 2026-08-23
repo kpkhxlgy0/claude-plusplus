@@ -93,6 +93,44 @@ test("installs a real managed mirror, Loader, Runtime, state, and shortcut idemp
   }
 });
 
+test("records the exact Node.js runtime used to install Claude++", async () => {
+  const fixture = await createFixture();
+  const nodeRuntimePath = join(fixture.root, "system-node", "node.exe");
+  try {
+    mkdirSync(dirname(nodeRuntimePath), { recursive: true });
+    writeFileSync(nodeRuntimePath, "fixture");
+
+    const result = await installClaudePlusPlus(
+      { ...fixture.options, nodeRuntimePath },
+      fixture.deps,
+    );
+    const persisted = readClaudePlusPlusState(fixture.paths.stateFile);
+
+    assert.equal(result.state.nodeRuntimePath, nodeRuntimePath);
+    assert.equal(persisted?.nodeRuntimePath, nodeRuntimePath);
+
+    const replacementNodeRuntimePath = join(fixture.root, "replacement-node", "node.exe");
+    mkdirSync(dirname(replacementNodeRuntimePath), { recursive: true });
+    writeFileSync(replacementNodeRuntimePath, "fixture");
+    const legacyCurrentState = JSON.parse(readFileSync(fixture.paths.stateFile, "utf8"));
+    delete legacyCurrentState.nodeRuntimePath;
+    writeFileSync(fixture.paths.stateFile, JSON.stringify(legacyCurrentState));
+    const maintained = await installClaudePlusPlus(
+      { ...fixture.options, nodeRuntimePath: replacementNodeRuntimePath },
+      fixture.deps,
+    );
+
+    assert.equal(maintained.status, "current");
+    assert.equal(maintained.state.nodeRuntimePath, replacementNodeRuntimePath);
+    assert.equal(
+      readClaudePlusPlusState(fixture.paths.stateFile)?.nodeRuntimePath,
+      replacementNodeRuntimePath,
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("trusted schema 2 non-current maintenance preserves its mirror and original ASAR hash", async () => {
   const fixture = await createFixture();
   try {

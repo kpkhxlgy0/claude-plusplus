@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import {
   mutateRuntimeConfigAdvisory,
   readRuntimeConfig,
@@ -24,6 +24,7 @@ export interface SelfUpdateStateView {
   channel: UpdateChannel;
   sourceRoot: string;
   sourceLabel: string;
+  processId?: number;
   error?: string;
 }
 
@@ -41,6 +42,7 @@ export interface ClaudePlusPlusConfigView {
 export interface UpdateServicePaths {
   sourceRoot: string;
   configFile: string;
+  stateFile: string;
   selfUpdateStateFile: string;
 }
 
@@ -75,14 +77,18 @@ export interface CheckClaudePlusPlusUpdateOptions extends UpdateServicePaths {
 }
 
 export interface RunClaudePlusPlusUpdateOptions extends UpdateServicePaths {
-  launch?: (command: string, args: string[]) => void;
+  launch?: (command: string, args: string[]) => number | void | Promise<number | void>;
   now?: () => Date;
+  probeNodeVersion?: (path: string) => string | null;
 }
 
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const SELF_UPDATE_LAUNCH_GRACE_MS = 60 * 1000;
+const SELF_UPDATE_MAX_ACTIVE_MS = 6 * 60 * 60 * 1000;
 
 export function getUpdateConfigView(paths: UpdateServicePaths): ClaudePlusPlusConfigView {
   const config = readRuntimeConfig(paths.configFile);
+  const selfUpdate = readSelfUpdateState(paths.selfUpdateStateFile);
   return {
     version: CLAUDE_PLUSPLUS_VERSION,
     autoUpdate: config.claudePlusPlus.autoUpdate,
@@ -91,7 +97,7 @@ export function getUpdateConfigView(paths: UpdateServicePaths): ClaudePlusPlusCo
     updateRef: config.claudePlusPlus.updateRef,
     installationSource: describeInstallationSource(paths.sourceRoot),
     updateCheck: config.claudePlusPlus.updateCheck ?? null,
-    selfUpdate: readSelfUpdateState(paths.selfUpdateStateFile),
+    selfUpdate: retryableSelfUpdateView(selfUpdate),
   };
 }
 
@@ -150,26 +156,29 @@ export async function checkClaudePlusPlusUpdate(
   return check;
 }
 
-export function runClaudePlusPlusUpdate(
+export async function runClaudePlusPlusUpdate(
   options: RunClaudePlusPlusUpdateOptions,
-): { status: "checking" } {
+): Promise<{ status: "checking" }> {
+  const now = options.now ?? (() => new Date());
+  if (isSelfUpdateActive(readSelfUpdateState(options.selfUpdateStateFile), now().getTime())) {
+    return { status: "checking" };
+  }
   const config = readRuntimeConfig(options.configFile);
-  const node = join(options.sourceRoot, "toolchain", "node.exe");
   const cli = join(options.sourceRoot, "packages", "installer", "dist", "cli.js");
-  if (!existsSync(node) || !existsSync(cli)) {
+  if (!existsSync(cli)) {
     throw new Error("Claude++ installed CLI is unavailable. Run the installer again, then retry.");
   }
+  const node = resolveUpdateNodeRuntime(options);
   const args = [cli, "update"];
   if (config.claudePlusPlus.updateChannel === "prerelease") args.push("--prerelease");
   if (config.claudePlusPlus.updateChannel === "custom") {
     args.push("--repo", config.claudePlusPlus.updateRepo, "--ref", config.claudePlusPlus.updateRef);
   }
-  const now = (options.now ?? (() => new Date()))().toISOString();
   const repo = config.claudePlusPlus.updateChannel === "custom"
     ? config.claudePlusPlus.updateRepo
     : CLAUDE_PLUSPLUS_REPO;
-  writeJsonAtomic(options.selfUpdateStateFile, {
-    checkedAt: now,
+  const checkingState: SelfUpdateStateView = {
+    checkedAt: now().toISOString(),
     status: "checking",
     currentVersion: CLAUDE_PLUSPLUS_VERSION,
     latestVersion: null,
@@ -179,9 +188,109 @@ export function runClaudePlusPlusUpdate(
     channel: config.claudePlusPlus.updateChannel,
     sourceRoot: options.sourceRoot,
     sourceLabel: describeInstallationSource(options.sourceRoot).label,
-  });
-  (options.launch ?? launchDetached)(node, args);
+  };
+  writeJsonAtomic(options.selfUpdateStateFile, checkingState);
+  try {
+    const processId = await (options.launch ?? launchDetached)(node, args);
+    if (typeof processId === "number" && Number.isSafeInteger(processId) && processId > 0) {
+      recordLaunchedProcessId(options.selfUpdateStateFile, checkingState.checkedAt, processId);
+    }
+  } catch (error) {
+    const message = `Could not start Claude++ updater: ${errorMessage(error)}`;
+    writeJsonAtomic(options.selfUpdateStateFile, {
+      ...checkingState,
+      completedAt: now().toISOString(),
+      status: "failed",
+      error: message,
+    });
+    throw new Error(message);
+  }
   return { status: "checking" };
+}
+
+function recordLaunchedProcessId(path: string, checkedAt: string, processId: number): void {
+  const current = readSelfUpdateState(path);
+  if (current?.status !== "checking" || current.checkedAt !== checkedAt) return;
+  writeJsonAtomic(path, { ...current, processId });
+}
+
+function retryableSelfUpdateView(state: SelfUpdateStateView | null): SelfUpdateStateView | null {
+  if (state?.status !== "checking" || isSelfUpdateActive(state)) return state;
+  return {
+    ...state,
+    completedAt: state.checkedAt,
+    status: "failed",
+    error: "The previous Claude++ update did not complete. Retry the update.",
+  };
+}
+
+function isSelfUpdateActive(
+  state: SelfUpdateStateView | null,
+  now = Date.now(),
+): boolean {
+  if (state?.status !== "checking") return false;
+  const checkedAt = Date.parse(state.checkedAt);
+  if (!Number.isFinite(checkedAt)) return false;
+  const age = now - checkedAt;
+  if (age > SELF_UPDATE_MAX_ACTIVE_MS) return false;
+  if (typeof state.processId === "number" && Number.isSafeInteger(state.processId) && state.processId > 0) {
+    return isProcessRunning(state.processId);
+  }
+  return age >= -SELF_UPDATE_LAUNCH_GRACE_MS && age <= SELF_UPDATE_LAUNCH_GRACE_MS;
+}
+
+function isProcessRunning(processId: number): boolean {
+  try {
+    process.kill(processId, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+
+function resolveUpdateNodeRuntime(options: RunClaudePlusPlusUpdateOptions): string {
+  const bundledNode = join(options.sourceRoot, "toolchain", "node.exe");
+  if (existsSync(bundledNode)) return bundledNode;
+
+  const recordedNode = readRecordedNodeRuntimePath(options.stateFile);
+  if (!recordedNode || !isAbsolute(recordedNode) || !existsSync(recordedNode)) {
+    throw new Error(
+      "Claude++ needs Node.js 24 or newer to update this source installation. " +
+      "Re-run install.ps1 with Node.js 24 or newer, then retry.",
+    );
+  }
+  const version = (options.probeNodeVersion ?? probeNodeVersion)(recordedNode);
+  const major = version?.trim().match(/^v(\d+)\.\d+\.\d+$/)?.[1];
+  if (!major || Number(major) < 24) {
+    throw new Error(
+      `Claude++ needs Node.js 24 or newer to update this source installation ` +
+      `(recorded runtime reported ${version?.trim() || "no valid version"}). ` +
+      "Re-run install.ps1 with Node.js 24 or newer, then retry.",
+    );
+  }
+  return recordedNode;
+}
+
+function readRecordedNodeRuntimePath(path: string): string | null {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    if (value.schemaVersion !== 1 && value.schemaVersion !== 2) return null;
+    return typeof value.nodeRuntimePath === "string" ? value.nodeRuntimePath : null;
+  } catch {
+    return null;
+  }
+}
+
+function probeNodeVersion(path: string): string | null {
+  try {
+    return execFileSync(path, ["--version"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      windowsHide: true,
+    }).trim();
+  } catch {
+    return null;
+  }
 }
 
 function describeInstallationSource(sourceRoot: string): { label: string; detail: string } {
@@ -233,14 +342,30 @@ async function requestReleases(
   }
 }
 
-function launchDetached(command: string, args: string[]): void {
-  const child = spawn(command, args, {
-    cwd: dirname(command),
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
+function launchDetached(command: string, args: string[]): Promise<number | void> {
+  return new Promise((resolve, reject) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, {
+        cwd: dirname(command),
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve(child.pid);
+    });
   });
-  child.unref();
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function writeJsonAtomic(path: string, value: unknown): void {

@@ -61,6 +61,60 @@ test("Check Now publishes the forced product result before rerendering Config", 
   assert.equal(published.at(-1)?.latestVersion, "0.3.1");
 });
 
+test("Download Update disables duplicate starts while the updater is launching", async () => {
+  const fixture = settingsFixture();
+  const root = fixture.environment.document.createElement("div");
+  const update = config();
+  const launch = deferred();
+  let launches = 0;
+  await renderConfigPage(context(root, update, absentWatcher(), {
+    async runUpdate() {
+      launches += 1;
+      await launch.promise;
+      update.selfUpdate = checkingSelfUpdate();
+    },
+  }));
+  const updates = findSectionByHeading(root, "Claude++ Updates");
+  const download = findButtonByText(updates, "Download Update");
+
+  fixture.click(download);
+  fixture.click(download);
+
+  assert.equal(download.disabled, true);
+  assert.equal(download.textContent, "Starting Update…");
+  assert.equal(launches, 1);
+  launch.resolve();
+  await flushPromises();
+
+  const refreshedUpdates = findSectionByHeading(root, "Claude++ Updates");
+  const inProgress = findButtonByText(refreshedUpdates, "Update in Progress");
+  assert.equal(inProgress.disabled, true);
+  assert.match(refreshedUpdates.textContent ?? "", /Checking for updates/i);
+  fixture.click(inProgress);
+  assert.equal(launches, 1);
+});
+
+test("Download Update restores the action and reports launch failures inline", async () => {
+  const fixture = settingsFixture();
+  const root = fixture.environment.document.createElement("div");
+  await renderConfigPage(context(root, config(), absentWatcher(), {
+    runUpdate: async () => {
+      throw new Error("Node.js 24 or newer is required");
+    },
+  }));
+  const updates = findSectionByHeading(root, "Claude++ Updates");
+  const download = findButtonByText(updates, "Download Update");
+
+  fixture.click(download);
+  await flushPromises();
+
+  assert.equal(download.disabled, false);
+  assert.equal(download.textContent, "Download Update");
+  const alert = updates.querySelector('[role="alert"]');
+  assert.ok(alert);
+  assert.match(alert.textContent ?? "", /Could not start Claude\+\+ update.*Node\.js 24 or newer/i);
+});
+
 function context(
   root: HTMLElement,
   update: ClaudePlusPlusConfigView,
@@ -68,6 +122,7 @@ function context(
   options: {
     check?: ClaudePlusPlusUpdateCheck;
     publish?(check: ClaudePlusPlusUpdateCheck | null): void;
+    runUpdate?(): Promise<void>;
   } = {},
 ) {
   return {
@@ -76,6 +131,9 @@ function context(
       if (channel === "claudepp:get-config") return update as T;
       if (channel === "claudepp:get-watcher-health") return watcher as T;
       if (channel === "claudepp:check-claudepp-update") return options.check as T;
+      if (channel === "claudepp:run-claudepp-update") {
+        return await options.runUpdate?.() as T;
+      }
       return undefined as T;
     },
     publishProductUpdate: options.publish ?? (() => {}),
@@ -98,6 +156,14 @@ function findButtonByText(root: HTMLElement, label: string): HTMLButtonElement {
 
 function flushPromises(): Promise<void> {
   return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
 }
 
 function productCheck(
@@ -130,6 +196,21 @@ function config(): ClaudePlusPlusConfigView {
     installationSource: { label: "Packaged Windows release", detail: "Bundled Node.js runtime" },
     updateCheck: null,
     selfUpdate: null,
+  };
+}
+
+function checkingSelfUpdate(): NonNullable<ClaudePlusPlusConfigView["selfUpdate"]> {
+  return {
+    checkedAt: "2026-08-23T00:00:00.000Z",
+    status: "checking",
+    currentVersion: "0.3.1",
+    latestVersion: null,
+    targetRef: null,
+    releaseUrl: null,
+    repo: "kpkhxlgy0/claude-plusplus",
+    channel: "stable",
+    sourceRoot: "C:\\Users\\fixture\\.claude-plusplus\\source",
+    sourceLabel: "Source checkout",
   };
 }
 

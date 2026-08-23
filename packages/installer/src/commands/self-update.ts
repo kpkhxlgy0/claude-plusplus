@@ -120,14 +120,17 @@ export async function selfUpdate(
     return state;
   }
 
-  writeSelfUpdateState(paths.selfUpdateStateFile, createState({
-    status: "checking",
-    now: deps.now(),
-    channel: selection.channel,
-    repo: selection.repo,
-    sourceRoot,
-    sourceLabel: selection.sourceLabel,
-  }));
+  writeSelfUpdateState(paths.selfUpdateStateFile, {
+    ...createState({
+      status: "checking",
+      now: deps.now(),
+      channel: selection.channel,
+      repo: selection.repo,
+      sourceRoot,
+      sourceLabel: selection.sourceLabel,
+    }),
+    processId: process.pid,
+  });
 
   const parent = dirname(sourceRoot);
   mkdirSync(parent, { recursive: true });

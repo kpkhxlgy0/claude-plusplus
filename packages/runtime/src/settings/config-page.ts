@@ -103,7 +103,7 @@ function renderUpdatesSection(
     `${config.installationSource.label}: ${config.installationSource.detail}`,
   ));
   card.appendChild(settingsMessageRow(document, "Last Claude++ update", selfUpdateSummary(config.selfUpdate)));
-  card.appendChild(updateActionsRow(context, config));
+  card.appendChild(updateActionsRow(context, config, card));
   if (config.updateCheck) card.appendChild(releaseNotesRow(document, config.updateCheck));
   section.appendChild(card);
   return section;
@@ -150,7 +150,11 @@ function updateChannelRow(context: ConfigPageContext, config: ClaudePlusPlusConf
   return action.row;
 }
 
-function updateActionsRow(context: ConfigPageContext, config: ClaudePlusPlusConfigView): HTMLElement {
+function updateActionsRow(
+  context: ConfigPageContext,
+  config: ClaudePlusPlusConfigView,
+  card: HTMLElement,
+): HTMLElement {
   const document = context.root.ownerDocument;
   const check = config.updateCheck;
   const action = actionRow(
@@ -172,10 +176,35 @@ function updateActionsRow(context: ConfigPageContext, config: ClaudePlusPlusConf
       await context.invoke("claudepp:open-external", check.releaseUrl);
     }));
   }
-  action.actions.appendChild(settingsButton(document, "Download Update", async () => {
-    await context.invoke("claudepp:run-claudepp-update");
-    await renderConfigPage(context);
-  }));
+  const downloadLabel = "Download Update";
+  const updateInProgress = config.selfUpdate?.status === "checking";
+  const download = settingsButton(
+    document,
+    updateInProgress ? "Update in Progress" : downloadLabel,
+    async () => {
+      if (download.disabled) return;
+      download.disabled = true;
+      download.textContent = "Starting Update…";
+      card.querySelector('[data-claudepp-update-error="true"]')?.remove();
+      try {
+        await context.invoke("claudepp:run-claudepp-update");
+        await renderConfigPage(context);
+      } catch (error) {
+        download.disabled = false;
+        download.textContent = downloadLabel;
+        const message = settingsMessageRow(
+          document,
+          "Could not start Claude++ update",
+          errorMessage(error),
+        );
+        message.setAttribute("data-claudepp-update-error", "true");
+        message.setAttribute("role", "alert");
+        card.appendChild(message);
+      }
+    },
+  );
+  download.disabled = updateInProgress;
+  action.actions.appendChild(download);
   return action.row;
 }
 

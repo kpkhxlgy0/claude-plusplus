@@ -42,6 +42,7 @@ const execFileAsync = promisify(execFile);
 export interface InstallCommandOptions {
   paths?: ClaudePlusPlusPaths;
   sourceRoot?: string;
+  nodeRuntimePath?: string;
   force?: boolean;
   cleanupAllOld?: boolean;
   watcher?: boolean;
@@ -65,6 +66,7 @@ export async function installClaudePlusPlus(
 ): Promise<InstallCommandResult> {
   const paths = options.paths ?? resolveClaudePlusPlusPaths();
   const sourceRoot = options.sourceRoot ?? resolveInstallerSourceRoot();
+  const nodeRuntimePath = options.nodeRuntimePath ?? process.execPath;
   const discover = dependencies.discover ?? discoverClaudeInstall;
   const createShortcut = dependencies.createShortcut ?? createWindowsShortcut;
   const now = dependencies.now ?? (() => new Date());
@@ -107,7 +109,13 @@ export async function installClaudePlusPlus(
 
     if (isCurrent && existingState) {
       await prepared.commit();
-      if (options.watcher) return { status: "current", state: existingState };
+      const currentState: ClaudePlusPlusState = existingState.nodeRuntimePath === nodeRuntimePath
+        ? existingState
+        : { ...existingState, nodeRuntimePath };
+      if (currentState !== existingState) {
+        writeClaudePlusPlusState(paths.stateFile, currentState);
+      }
+      if (options.watcher) return { status: "current", state: currentState };
       await copyRuntimeAtomically(
         join(sourceRoot, "packages", "runtime", "dist"),
         paths,
@@ -119,7 +127,7 @@ export async function installClaudePlusPlus(
         await cleanupOldWindowsStoreMirrors(paths, official.packageFullName);
       }
       writeJsonAtomic(paths.configFile, migratedConfig);
-      return { status: "current", state: existingState };
+      return { status: "current", state: currentState };
     }
 
     await copyRuntimeAtomically(
@@ -148,6 +156,7 @@ export async function installClaudePlusPlus(
       originalAsarHash,
       patchedAsarHash,
       installedAt: now().toISOString(),
+      nodeRuntimePath,
       watcher: existingState?.watcher ?? "none",
     };
     writeClaudePlusPlusState(paths.stateFile, state);

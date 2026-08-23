@@ -129,6 +129,27 @@ test("a verified official package replaces source only after maintenance succeed
   }
 });
 
+test("checking state identifies the updater process that owns it", async () => {
+  const fixture = updateFixture();
+  const resolveRelease = fixture.deps.resolveRelease;
+  let checkingProcessId: number | undefined;
+  try {
+    fixture.deps.resolveRelease = async (options) => {
+      checkingProcessId = readSelfUpdateState(
+        fixture.options.paths.selfUpdateStateFile,
+      )?.processId;
+      return await resolveRelease(options);
+    };
+
+    const result = await selfUpdate(fixture.options, fixture.deps);
+
+    assert.equal(checkingProcessId, process.pid);
+    assert.equal(result.processId, undefined);
+  } finally {
+    fixture.dispose();
+  }
+});
+
 function updateFixture(overrides: {
   expectedSha?: string;
   archiveContents?: string;

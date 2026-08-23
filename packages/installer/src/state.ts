@@ -12,6 +12,7 @@ interface ClaudePlusPlusStateBase {
   asarPath: string;
   originalMain: string;
   installedAt: string;
+  nodeRuntimePath?: string;
   watcher?: "scheduled-task" | "none";
 }
 
@@ -42,6 +43,7 @@ export interface SelfUpdateState {
   channel: SelfUpdateChannel;
   sourceRoot: string;
   sourceLabel: string;
+  processId?: number;
   error?: string;
 }
 
@@ -129,6 +131,9 @@ function readClaudePlusPlusStateBase(
     asarPath: value.asarPath,
     originalMain: value.originalMain,
     installedAt: value.installedAt,
+    ...(typeof value.nodeRuntimePath === "string"
+      ? { nodeRuntimePath: value.nodeRuntimePath }
+      : {}),
     watcher: value.watcher === "scheduled-task" ? "scheduled-task" : "none",
   };
 }
