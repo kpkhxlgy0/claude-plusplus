@@ -35,7 +35,7 @@ import {
   type MirrorFileSystem,
 } from "../windows-store-mirror.js";
 
-const version = "0.3.1";
+const version = "0.3.2";
 const defaultUpdateRepo = "kpkhxlgy0/claude-plusplus";
 const execFileAsync = promisify(execFile);
 

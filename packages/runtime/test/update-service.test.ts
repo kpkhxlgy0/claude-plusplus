@@ -15,7 +15,7 @@ test("returns the safe default update configuration with no prior result", () =>
   const fixture = updateServiceFixture();
   try {
     const view = getUpdateConfigView(fixture.paths);
-    assert.equal(view.version, "0.3.1");
+    assert.equal(view.version, "0.3.2");
     assert.equal(view.autoUpdate, false);
     assert.equal(view.updateChannel, "stable");
     assert.equal(view.updateRepo, "kpkhxlgy0/claude-plusplus");
@@ -32,8 +32,8 @@ test("checks the selected release for display and persists the result", async ()
     const result = await checkClaudePlusPlusUpdate({
       ...fixture.paths,
       requestReleases: async () => [{
-        tag_name: "v0.3.2",
-        html_url: "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.2",
+        tag_name: "v0.3.3",
+        html_url: "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.3",
         body: "Release notes",
         draft: false,
         prerelease: false,
@@ -41,11 +41,11 @@ test("checks the selected release for display and persists the result", async ()
       now: () => new Date("2026-08-13T00:00:00Z"),
     });
 
-    assert.equal(result.latestVersion, "0.3.2");
+    assert.equal(result.latestVersion, "0.3.3");
     assert.equal(result.updateAvailable, true);
     assert.equal(
       JSON.parse(readFileSync(fixture.paths.configFile, "utf8")).claudePlusPlus.updateCheck.latestVersion,
-      "0.3.2",
+      "0.3.3",
     );
   } finally {
     fixture.dispose();
@@ -58,14 +58,14 @@ test("does not treat an equal-core prerelease as newer than the installed releas
     const result = await checkClaudePlusPlusUpdate({
       ...fixture.paths,
       requestReleases: async () => [{
-        tag_name: "v0.3.1-beta.1",
+        tag_name: "v0.3.2-beta.1",
         draft: false,
         prerelease: true,
       }],
       now: () => new Date("2026-08-13T00:00:00Z"),
     });
 
-    assert.equal(result.latestVersion, "0.3.1-beta.1");
+    assert.equal(result.latestVersion, "0.3.2-beta.1");
     assert.equal(result.updateAvailable, false);
   } finally {
     fixture.dispose();
@@ -157,7 +157,7 @@ test("automatic and forced product checks return results without replacing inval
         const result = await checkClaudePlusPlusUpdate({
           ...fixture.paths,
           force,
-          requestReleases: async () => [release("v0.3.2", false)],
+          requestReleases: async () => [release("v0.3.3", false)],
         });
         assert.equal(result.updateAvailable, true);
         assert.equal(readFileSync(fixture.paths.configFile, "utf8"), raw);
@@ -325,7 +325,7 @@ test("does not launch another updater while a self-update is already checking", 
     writeFileSync(fixture.paths.selfUpdateStateFile, JSON.stringify({
       checkedAt: new Date().toISOString(),
       status: "checking",
-      currentVersion: "0.3.1",
+      currentVersion: "0.3.2",
       latestVersion: null,
       targetRef: null,
       releaseUrl: null,
@@ -355,7 +355,7 @@ test("an abandoned checking state does not permanently block a new updater", asy
     writeFileSync(fixture.paths.selfUpdateStateFile, JSON.stringify({
       checkedAt: "2000-01-01T00:00:00.000Z",
       status: "checking",
-      currentVersion: "0.3.1",
+      currentVersion: "0.3.2",
       latestVersion: null,
       targetRef: null,
       releaseUrl: null,
@@ -384,7 +384,7 @@ test("config view presents an abandoned checking state as retryable failure", ()
     writeFileSync(fixture.paths.selfUpdateStateFile, JSON.stringify({
       checkedAt: "2000-01-01T00:00:00.000Z",
       status: "checking",
-      currentVersion: "0.3.1",
+      currentVersion: "0.3.2",
       latestVersion: null,
       targetRef: null,
       releaseUrl: null,

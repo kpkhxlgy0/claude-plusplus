@@ -5,6 +5,22 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.3.2
+
+Release notes: [docs/releases/0.3.2.md](docs/releases/0.3.2.md)
+
+### Changed
+
+- Source installations now record the exact Node.js executable used by install and same-version maintenance, while
+  packaged installations continue to prefer their bundled runtime.
+
+### Fixed
+
+- Fixed Config's `Download Update` action for source installations by validating and reusing their recorded Node.js
+  24+ runtime when no bundled runtime exists.
+- Added visible updater launch progress and inline failure feedback, prevented duplicate launches, and made abandoned
+  checking state retryable instead of leaving the action permanently blocked.
+
 ## 0.3.1
 
 Release notes: [docs/releases/0.3.1.md](docs/releases/0.3.1.md)

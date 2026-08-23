@@ -30,7 +30,10 @@ pwsh -File .\install.ps1
 ```
 
 The script builds the checkout with npm before installing it. It does not download or install Node.js; when Node.js
-24+ or npm is unavailable, it prints the requirement and exits without starting installation.
+24+ or npm is unavailable, it prints the requirement and exits without starting installation. A successful source
+install records the exact Node.js executable it used. Settings can reuse that executable for Stable or Prerelease
+updates only while it still exists and reports Node.js 24 or newer; those official update channels do not need npm.
+Re-run `install.ps1` after moving or replacing Node.js. Custom source updates still require both Node.js 24+ and npm.
 
 The command name used below is `claudeplusplus`. In an extracted or installed Windows package, its launcher is
 `bin\claudeplusplus.cmd`.
@@ -87,8 +90,9 @@ separate opt-in maintenance policy above remains unchanged.
 
 The automatic Store warm attaches only a success continuation and has no local rejection handler, matching Codex++.
 An explicit Store-page render catches a load failure, clears the Store badge, and renders the page's error and
-`Refresh` state. The product `Update` click is likewise fire-and-forget with no local rejection handler; the automatic
-product-check IPC does catch rejection and hides the action.
+`Refresh` state. The group-heading `Update` review click is likewise fire-and-forget with no local rejection handler;
+the automatic product-check IPC does catch rejection and hides the action. Config's separate `Download Update` action
+starts the installed updater explicitly and reports launch progress or failure in Settings.
 
 ## Installation boundary
 

@@ -1,6 +1,6 @@
 {
   "name": "claude-plusplus",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "Unofficial tweak platform for Claude Code Desktop on Windows",
   "license": "MIT",
