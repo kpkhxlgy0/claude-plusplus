@@ -18,8 +18,9 @@ Release notes: [docs/releases/0.3.2.md](docs/releases/0.3.2.md)
 
 - Fixed Config's `Download Update` action for source installations by validating and reusing their recorded Node.js
   24+ runtime when no bundled runtime exists.
-- Added visible updater launch progress and inline failure feedback, prevented duplicate launches, and made abandoned
-  checking state retryable instead of leaving the action permanently blocked.
+- Added visible updater launch and phase progress, real download percentages when the server supplies a total size,
+  automatic terminal-state refresh, inline failure feedback, duplicate-launch prevention, and retryable abandoned
+  checking state.
 
 ## 0.3.1
 

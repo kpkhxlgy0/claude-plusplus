@@ -92,7 +92,9 @@ The automatic Store warm attaches only a success continuation and has no local r
 An explicit Store-page render catches a load failure, clears the Store badge, and renders the page's error and
 `Refresh` state. The group-heading `Update` review click is likewise fire-and-forget with no local rejection handler;
 the automatic product-check IPC does catch rejection and hides the action. Config's separate `Download Update` action
-starts the installed updater explicitly and reports launch progress or failure in Settings.
+starts the installed updater explicitly and reports launch, download, verification, extraction, build, installation,
+completion, or failure state in Settings. Downloads show a real percentage and progress bar only when the response
+supplies a valid total size; otherwise Settings reports the actual bytes received without inventing a percentage.
 
 ## Installation boundary
 

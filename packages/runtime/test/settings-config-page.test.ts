@@ -115,6 +115,86 @@ test("Download Update restores the action and reports launch failures inline", a
   assert.match(alert.textContent ?? "", /Could not start Claude\+\+ update.*Node\.js 24 or newer/i);
 });
 
+test("shows a real download percentage and progress element when total bytes are known", async () => {
+  const fixture = settingsFixture();
+  const root = fixture.environment.document.createElement("div");
+  const update = config();
+  update.selfUpdate = {
+    ...checkingSelfUpdate(),
+    phase: "downloading",
+    downloadedBytes: 8,
+    totalBytes: 16,
+  };
+
+  await renderConfigPage(context(root, update, absentWatcher()));
+
+  assert.match(root.textContent ?? "", /Downloading 50%.*8 B of 16 B/i);
+  const progress = root.querySelector('[data-claudepp-update-progress="true"]');
+  assert.ok(progress);
+  assert.equal(progress.getAttribute("value"), "8");
+  assert.equal(progress.getAttribute("max"), "16");
+});
+
+test("shows downloaded bytes without a percentage when total size is unknown", async () => {
+  const fixture = settingsFixture();
+  const root = fixture.environment.document.createElement("div");
+  const update = config();
+  update.selfUpdate = {
+    ...checkingSelfUpdate(),
+    phase: "downloading",
+    downloadedBytes: 2048,
+    totalBytes: null,
+  };
+
+  await renderConfigPage(context(root, update, absentWatcher()));
+
+  assert.match(root.textContent ?? "", /Downloading update.*2 KB downloaded/i);
+  assert.doesNotMatch(root.textContent ?? "", /\d+%/);
+  assert.equal(root.querySelector('[data-claudepp-update-progress="true"]'), null);
+});
+
+test("polls an in-progress update until Config renders its terminal state", async () => {
+  const fixture = settingsFixture();
+  const root = fixture.environment.document.createElement("div");
+  fixture.environment.document.body.appendChild(root);
+  const update = config();
+  update.selfUpdate = {
+    ...checkingSelfUpdate(),
+    phase: "verifying",
+  };
+  const timer = manualTimer();
+  const teardown = await renderConfigPage(context(root, update, absentWatcher(), { timer: timer.timer }));
+
+  assert.match(root.textContent ?? "", /Verifying update/i);
+  assert.equal(timer.pending(), 1);
+  update.selfUpdate = {
+    ...checkingSelfUpdate(),
+    completedAt: "2026-08-23T00:01:00.000Z",
+    status: "up-to-date",
+  };
+  timer.fireNext();
+  await flushPromises();
+
+  assert.match(root.textContent ?? "", /Up to date/i);
+  assert.equal(findButtonByText(root, "Download Update").disabled, false);
+  assert.equal(timer.pending(), 0);
+  teardown();
+});
+
+test("stops update polling when the Config page is disposed", async () => {
+  const fixture = settingsFixture();
+  const root = fixture.environment.document.createElement("div");
+  fixture.environment.document.body.appendChild(root);
+  const update = config();
+  update.selfUpdate = { ...checkingSelfUpdate(), phase: "downloading" };
+  const timer = manualTimer();
+  const teardown = await renderConfigPage(context(root, update, absentWatcher(), { timer: timer.timer }));
+
+  assert.equal(timer.pending(), 1);
+  teardown();
+  assert.equal(timer.pending(), 0);
+});
+
 function context(
   root: HTMLElement,
   update: ClaudePlusPlusConfigView,
@@ -123,10 +203,12 @@ function context(
     check?: ClaudePlusPlusUpdateCheck;
     publish?(check: ClaudePlusPlusUpdateCheck | null): void;
     runUpdate?(): Promise<void>;
+    timer?: ReturnType<typeof manualTimer>["timer"];
   } = {},
 ) {
   return {
     root,
+    timer: options.timer,
     async invoke<T = unknown>(channel: string): Promise<T> {
       if (channel === "claudepp:get-config") return update as T;
       if (channel === "claudepp:get-watcher-health") return watcher as T;
@@ -164,6 +246,32 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
     resolve = next;
   });
   return { promise, resolve };
+}
+
+function manualTimer() {
+  type Handle = { callback: () => void };
+  const handles: Handle[] = [];
+  return {
+    timer: {
+      set(callback: () => void): Handle {
+        const handle = { callback };
+        handles.push(handle);
+        return handle;
+      },
+      clear(handle: Handle): void {
+        const index = handles.indexOf(handle);
+        if (index >= 0) handles.splice(index, 1);
+      },
+    },
+    fireNext(): void {
+      const handle = handles.shift();
+      assert.ok(handle);
+      handle.callback();
+    },
+    pending(): number {
+      return handles.length;
+    },
+  };
 }
 
 function productCheck(

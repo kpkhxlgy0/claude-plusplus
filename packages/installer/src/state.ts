@@ -30,6 +30,13 @@ export type ClaudePlusPlusState = ClaudePlusPlusStateV1 | ClaudePlusPlusStateV2;
 
 export type SelfUpdateChannel = "stable" | "prerelease" | "custom";
 export type SelfUpdateStatus = "checking" | "up-to-date" | "updated" | "failed" | "disabled";
+export type SelfUpdatePhase =
+  | "checking"
+  | "downloading"
+  | "verifying"
+  | "extracting"
+  | "building"
+  | "installing";
 
 export interface SelfUpdateState {
   checkedAt: string;
@@ -44,6 +51,9 @@ export interface SelfUpdateState {
   sourceRoot: string;
   sourceLabel: string;
   processId?: number;
+  phase?: SelfUpdatePhase;
+  downloadedBytes?: number;
+  totalBytes?: number | null;
   error?: string;
 }
 
@@ -84,6 +94,14 @@ export function readSelfUpdateState(path: string): SelfUpdateState | null {
     if (typeof value.checkedAt !== "string" || typeof value.status !== "string" ||
       typeof value.currentVersion !== "string" || typeof value.repo !== "string" ||
       typeof value.channel !== "string" || typeof value.sourceRoot !== "string") return null;
+    if (value.phase !== undefined && !isSelfUpdatePhase(value.phase)) delete value.phase;
+    if (value.downloadedBytes !== undefined && !isNonNegativeSafeInteger(value.downloadedBytes)) {
+      delete value.downloadedBytes;
+    }
+    if (value.totalBytes !== undefined && value.totalBytes !== null &&
+      !isNonNegativeSafeInteger(value.totalBytes)) {
+      delete value.totalBytes;
+    }
     return value as SelfUpdateState;
   } catch {
     return null;
@@ -140,6 +158,15 @@ function readClaudePlusPlusStateBase(
 
 function isLowercaseSha256(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function isSelfUpdatePhase(value: unknown): value is SelfUpdatePhase {
+  return value === "checking" || value === "downloading" || value === "verifying" ||
+    value === "extracting" || value === "building" || value === "installing";
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

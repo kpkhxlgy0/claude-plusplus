@@ -12,6 +12,14 @@ import { CLAUDE_PLUSPLUS_VERSION, compareVersions } from "./version.js";
 
 export const CLAUDE_PLUSPLUS_REPO = "kpkhxlgy0/claude-plusplus";
 
+export type SelfUpdatePhase =
+  | "checking"
+  | "downloading"
+  | "verifying"
+  | "extracting"
+  | "building"
+  | "installing";
+
 export interface SelfUpdateStateView {
   checkedAt: string;
   completedAt?: string;
@@ -25,6 +33,9 @@ export interface SelfUpdateStateView {
   sourceRoot: string;
   sourceLabel: string;
   processId?: number;
+  phase?: SelfUpdatePhase;
+  downloadedBytes?: number;
+  totalBytes?: number | null;
   error?: string;
 }
 
@@ -180,6 +191,7 @@ export async function runClaudePlusPlusUpdate(
   const checkingState: SelfUpdateStateView = {
     checkedAt: now().toISOString(),
     status: "checking",
+    phase: "checking",
     currentVersion: CLAUDE_PLUSPLUS_VERSION,
     latestVersion: null,
     targetRef: config.claudePlusPlus.updateChannel === "custom" ? config.claudePlusPlus.updateRef : null,
@@ -306,10 +318,27 @@ function readSelfUpdateState(path: string): SelfUpdateStateView | null {
     if (typeof value.checkedAt !== "string" || typeof value.status !== "string" ||
       typeof value.currentVersion !== "string" || typeof value.repo !== "string" ||
       typeof value.channel !== "string" || typeof value.sourceRoot !== "string") return null;
+    if (value.phase !== undefined && !isSelfUpdatePhase(value.phase)) delete value.phase;
+    if (value.downloadedBytes !== undefined && !isNonNegativeSafeInteger(value.downloadedBytes)) {
+      delete value.downloadedBytes;
+    }
+    if (value.totalBytes !== undefined && value.totalBytes !== null &&
+      !isNonNegativeSafeInteger(value.totalBytes)) {
+      delete value.totalBytes;
+    }
     return value as SelfUpdateStateView;
   } catch {
     return null;
   }
+}
+
+function isSelfUpdatePhase(value: unknown): value is SelfUpdatePhase {
+  return value === "checking" || value === "downloading" || value === "verifying" ||
+    value === "extracting" || value === "building" || value === "installing";
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function normalizeVersion(tag: unknown): string | null {

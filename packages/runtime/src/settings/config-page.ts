@@ -19,21 +19,66 @@ export interface ConfigPageContext {
   root: HTMLElement;
   invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
   publishProductUpdate(check: ClaudePlusPlusUpdateCheck | null): void;
+  timer?: ConfigPageTimer;
 }
+
+export interface ConfigPageTimer {
+  set(callback: () => void, delay: number): ConfigPageTimerHandle;
+  clear(handle: ConfigPageTimerHandle): void;
+}
+
+export type ConfigPageTimerHandle = object;
+
+interface ActiveConfigPageContext extends ConfigPageContext {
+  refresh(): Promise<void>;
+}
+
+const CONFIG_UPDATE_REFRESH_MS = 500;
+const defaultConfigPageTimer: ConfigPageTimer = {
+  set: (callback, delay) => setTimeout(callback, delay) as ConfigPageTimerHandle,
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
 export async function renderConfigPage(context: ConfigPageContext): Promise<() => void> {
   let disposed = false;
+  let generation = 0;
+  let refreshHandle: ConfigPageTimerHandle | null = null;
+  const timer = context.timer ?? defaultConfigPageTimer;
+  let activeContext!: ActiveConfigPageContext;
+  const cancelRefresh = (): void => {
+    if (!refreshHandle) return;
+    timer.clear(refreshHandle);
+    refreshHandle = null;
+  };
+  const refresh = async (): Promise<void> => {
+    if (disposed) return;
+    cancelRefresh();
+    const currentGeneration = ++generation;
+    try {
+      const [config, watcher] = await Promise.all([
+        context.invoke<ClaudePlusPlusConfigView>("claudepp:get-config"),
+        context.invoke<WatcherHealth>("claudepp:get-watcher-health"),
+      ]);
+      if (disposed || currentGeneration !== generation) return;
+      renderConfig(activeContext, config, watcher);
+      if (config.selfUpdate?.status === "checking" && context.root.isConnected) {
+        refreshHandle = timer.set(() => {
+          refreshHandle = null;
+          if (!disposed && context.root.isConnected) void refresh();
+        }, CONFIG_UPDATE_REFRESH_MS);
+      }
+    } catch (error) {
+      if (!disposed && currentGeneration === generation) renderLoadError(context.root, error);
+    }
+  };
+  activeContext = { ...context, refresh };
   renderLoading(context.root);
-  try {
-    const [config, watcher] = await Promise.all([
-      context.invoke<ClaudePlusPlusConfigView>("claudepp:get-config"),
-      context.invoke<WatcherHealth>("claudepp:get-watcher-health"),
-    ]);
-    if (!disposed) renderConfig(context, config, watcher);
-  } catch (error) {
-    if (!disposed) renderLoadError(context.root, error);
-  }
-  return () => { disposed = true; };
+  await refresh();
+  return () => {
+    disposed = true;
+    generation += 1;
+    cancelRefresh();
+  };
 }
 
 function renderLoading(root: HTMLElement): void {
@@ -55,7 +100,7 @@ function renderLoadError(root: HTMLElement, error: unknown): void {
 }
 
 function renderConfig(
-  context: ConfigPageContext,
+  context: ActiveConfigPageContext,
   config: ClaudePlusPlusConfigView,
   watcher: WatcherHealth,
 ): void {
@@ -68,7 +113,7 @@ function renderConfig(
 }
 
 function renderUpdatesSection(
-  context: ConfigPageContext,
+  context: ActiveConfigPageContext,
   config: ClaudePlusPlusConfigView,
   watcher: WatcherHealth,
 ): HTMLElement {
@@ -84,7 +129,7 @@ function renderUpdatesSection(
   );
   const automaticToggle = settingsSwitch(document, config.autoUpdate, async (enabled) => {
     await context.invoke("claudepp:set-auto-update", enabled);
-    await renderConfigPage(context);
+    await context.refresh();
   }, "data-claudepp-auto-update");
   automaticToggle.disabled = !watcher.installed;
   automatic.actions.appendChild(automaticToggle);
@@ -102,14 +147,14 @@ function renderUpdatesSection(
     "Installation source",
     `${config.installationSource.label}: ${config.installationSource.detail}`,
   ));
-  card.appendChild(settingsMessageRow(document, "Last Claude++ update", selfUpdateSummary(config.selfUpdate)));
+  card.appendChild(selfUpdateRow(document, config.selfUpdate));
   card.appendChild(updateActionsRow(context, config, card));
   if (config.updateCheck) card.appendChild(releaseNotesRow(document, config.updateCheck));
   section.appendChild(card);
   return section;
 }
 
-function updateChannelRow(context: ConfigPageContext, config: ClaudePlusPlusConfigView): HTMLElement {
+function updateChannelRow(context: ActiveConfigPageContext, config: ClaudePlusPlusConfigView): HTMLElement {
   const document = context.root.ownerDocument;
   const action = actionRow(document, "Release channel", updateChannelSummary(config));
   const select = document.createElement("select");
@@ -128,7 +173,7 @@ function updateChannelRow(context: ConfigPageContext, config: ClaudePlusPlusConf
   select.value = config.updateChannel;
   select.addEventListener("change", () => {
     void context.invoke("claudepp:set-update-config", { updateChannel: select.value })
-      .then(() => renderConfigPage(context));
+      .then(() => context.refresh());
   });
   action.actions.appendChild(select);
   if (config.updateChannel === "custom") {
@@ -144,14 +189,14 @@ function updateChannelRow(context: ConfigPageContext, config: ClaudePlusPlusConf
         updateRepo: repo.value,
         updateRef: ref.value,
       });
-      await renderConfigPage(context);
+      await context.refresh();
     }));
   }
   return action.row;
 }
 
 function updateActionsRow(
-  context: ConfigPageContext,
+  context: ActiveConfigPageContext,
   config: ClaudePlusPlusConfigView,
   card: HTMLElement,
 ): HTMLElement {
@@ -169,7 +214,7 @@ function updateActionsRow(
     );
     context.publishProductUpdate(result);
     if (!context.root.isConnected) return;
-    await renderConfigPage(context);
+    await context.refresh();
   }));
   if (check?.releaseUrl) {
     action.actions.appendChild(settingsButton(document, "Release Notes", async () => {
@@ -180,7 +225,7 @@ function updateActionsRow(
   const updateInProgress = config.selfUpdate?.status === "checking";
   const download = settingsButton(
     document,
-    updateInProgress ? "Update in Progress" : downloadLabel,
+    updateInProgress ? selfUpdateActionLabel(config.selfUpdate) : downloadLabel,
     async () => {
       if (download.disabled) return;
       download.disabled = true;
@@ -188,7 +233,7 @@ function updateActionsRow(
       card.querySelector('[data-claudepp-update-error="true"]')?.remove();
       try {
         await context.invoke("claudepp:run-claudepp-update");
-        await renderConfigPage(context);
+        await context.refresh();
       } catch (error) {
         download.disabled = false;
         download.textContent = downloadLabel;
@@ -208,20 +253,20 @@ function updateActionsRow(
   return action.row;
 }
 
-function renderWatcherSection(context: ConfigPageContext, health: WatcherHealth): HTMLElement {
+function renderWatcherSection(context: ActiveConfigPageContext, health: WatcherHealth): HTMLElement {
   const document = context.root.ownerDocument;
   const section = settingsSection(document, "Auto-Repair Watcher");
   const card = settingsCard(document);
   const action = actionRow(document, health.title, health.summary);
   action.actions.appendChild(settingsButton(document, "Check Now", async () => {
-    await renderConfigPage(context);
+    await context.refresh();
   }));
   action.actions.appendChild(settingsButton(
     document,
     health.installed ? "Disable Watcher" : "Enable Watcher",
     async () => {
       await context.invoke("claudepp:set-watcher-enabled", !health.installed);
-      await renderConfigPage(context);
+      await context.refresh();
     },
   ));
   card.appendChild(action.row);
@@ -427,7 +472,83 @@ function selfUpdateSummary(state: SelfUpdateStateView | null): string {
   if (state.status === "updated") return `Updated ${when}.`;
   if (state.status === "up-to-date") return `Up to date ${when}.`;
   if (state.status === "disabled") return `Skipped ${when}; automatic refresh is disabled.`;
+  return selfUpdateProgressSummary(state);
+}
+
+function selfUpdateRow(document: Document, state: SelfUpdateStateView | null): HTMLElement {
+  const row = settingsMessageRow(document, "Last Claude++ update", selfUpdateSummary(state));
+  const progress = knownDownloadProgress(state);
+  if (!progress) return row;
+  const element = document.createElement("progress");
+  element.setAttribute("data-claudepp-update-progress", "true");
+  element.setAttribute("value", String(progress.downloadedBytes));
+  element.setAttribute("max", String(progress.totalBytes));
+  element.setAttribute("aria-label", `Claude++ update download ${progress.percent}%`);
+  element.textContent = `${progress.percent}%`;
+  element.style.cssText = "width:100%;margin-top:8px;";
+  row.appendChild(element);
+  return row;
+}
+
+function selfUpdateProgressSummary(state: SelfUpdateStateView): string {
+  if (state.phase === "downloading") {
+    const downloadedBytes = validByteCount(state.downloadedBytes) ? state.downloadedBytes : 0;
+    const progress = knownDownloadProgress(state);
+    if (progress) {
+      return `Downloading ${progress.percent}% · ${formatBytes(progress.downloadedBytes)} of ` +
+        `${formatBytes(progress.totalBytes)}.`;
+    }
+    return `Downloading update · ${formatBytes(downloadedBytes)} downloaded.`;
+  }
+  if (state.phase === "verifying") return "Verifying update.";
+  if (state.phase === "extracting") return "Extracting update.";
+  if (state.phase === "building") return "Building and testing Custom update.";
+  if (state.phase === "installing") return "Installing update.";
   return "Checking for updates.";
+}
+
+function selfUpdateActionLabel(state: SelfUpdateStateView | null): string {
+  if (state?.phase === "downloading") {
+    const progress = knownDownloadProgress(state);
+    return progress ? `Downloading ${progress.percent}%` : "Downloading Update…";
+  }
+  if (state?.phase === "verifying") return "Verifying Update…";
+  if (state?.phase === "extracting") return "Extracting Update…";
+  if (state?.phase === "building") return "Building Update…";
+  if (state?.phase === "installing") return "Installing Update…";
+  return "Update in Progress";
+}
+
+function knownDownloadProgress(state: SelfUpdateStateView | null): {
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number;
+} | null {
+  if (state?.phase !== "downloading" || !validByteCount(state.downloadedBytes) ||
+    !validByteCount(state.totalBytes) || state.totalBytes <= 0) return null;
+  const downloadedBytes = Math.min(state.downloadedBytes, state.totalBytes);
+  return {
+    downloadedBytes,
+    totalBytes: state.totalBytes,
+    percent: Math.floor(downloadedBytes * 100 / state.totalBytes),
+  };
+}
+
+function validByteCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let amount = value / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && amount >= 1024; index += 1) {
+    amount /= 1024;
+    unit = units[index];
+  }
+  const rounded = amount >= 10 || Number.isInteger(amount) ? amount.toFixed(0) : amount.toFixed(1);
+  return `${rounded} ${unit}`;
 }
 
 function statusLabel(status: "ok" | "warn" | "error"): string {

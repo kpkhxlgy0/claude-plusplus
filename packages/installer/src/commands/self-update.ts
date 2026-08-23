@@ -10,6 +10,7 @@ import {
   rmSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
   OFFICIAL_REPO,
@@ -49,10 +50,19 @@ export interface CommandResult {
   stderr: string;
 }
 
+export interface DownloadProgress {
+  downloadedBytes: number;
+  totalBytes: number | null;
+}
+
 export interface SelfUpdateDependencies {
   now(): Date;
   resolveRelease(options: { channel: "stable" | "prerelease"; repo: string }): Promise<ReleaseDescriptor>;
-  downloadFile(url: string, target: string): Promise<void>;
+  downloadFile(
+    url: string,
+    target: string,
+    onProgress?: (progress: DownloadProgress) => void,
+  ): Promise<void>;
   extractZip(archive: string, target: string): void;
   extractTar(archive: string, target: string): void;
   findSystemToolchain(): SystemNodeToolchain | null;
@@ -97,6 +107,14 @@ interface PreparedUpdate {
   sourceLabel: string;
 }
 
+type SelfUpdateProgressPatch = Partial<Pick<
+  SelfUpdateState,
+  "latestVersion" | "targetRef" | "releaseUrl" | "sourceLabel" |
+  "phase" | "downloadedBytes" | "totalBytes"
+>>;
+
+type SelfUpdateProgressReporter = (patch: SelfUpdateProgressPatch) => void;
+
 export async function selfUpdate(
   options: SelfUpdateOptions = {},
   dependencies: Partial<SelfUpdateDependencies> = {},
@@ -120,7 +138,7 @@ export async function selfUpdate(
     return state;
   }
 
-  writeSelfUpdateState(paths.selfUpdateStateFile, {
+  let checkingState: SelfUpdateState = {
     ...createState({
       status: "checking",
       now: deps.now(),
@@ -130,7 +148,18 @@ export async function selfUpdate(
       sourceLabel: selection.sourceLabel,
     }),
     processId: process.pid,
-  });
+    phase: "checking",
+  };
+  writeSelfUpdateState(paths.selfUpdateStateFile, checkingState);
+  const reportProgress: SelfUpdateProgressReporter = (patch) => {
+    checkingState = {
+      ...checkingState,
+      ...patch,
+      status: "checking",
+      processId: process.pid,
+    };
+    writeSelfUpdateState(paths.selfUpdateStateFile, checkingState);
+  };
 
   const parent = dirname(sourceRoot);
   mkdirSync(parent, { recursive: true });
@@ -138,8 +167,8 @@ export async function selfUpdate(
   let prepared: PreparedUpdate | null = null;
   try {
     prepared = selection.channel === "custom"
-      ? await prepareCustomUpdate(selection.repo, selection.ref, work, deps)
-      : await prepareOfficialUpdate(selection.channel, selection.repo, work, deps);
+      ? await prepareCustomUpdate(selection.repo, selection.ref, work, deps, reportProgress)
+      : await prepareOfficialUpdate(selection.channel, selection.repo, work, deps, reportProgress);
 
     if (!options.force && prepared.latestVersion && compareVersions(prepared.latestVersion, version) <= 0) {
       const state = createState({
@@ -155,6 +184,7 @@ export async function selfUpdate(
       return state;
     }
 
+    reportProgress({ phase: "installing" });
     applyPreparedUpdate(prepared.source, sourceRoot, paths, deps);
     const state = createState({
       status: "updated",
@@ -190,15 +220,29 @@ async function prepareOfficialUpdate(
   repo: string,
   work: string,
   deps: SelfUpdateDependencies,
+  reportProgress: SelfUpdateProgressReporter,
 ): Promise<PreparedUpdate> {
   const release = await deps.resolveRelease({ channel, repo });
   const archive = join(work, release.archiveName);
   const checksum = `${archive}.sha256`;
-  await deps.downloadFile(release.archiveUrl, archive);
+  reportProgress({
+    phase: "downloading",
+    latestVersion: release.version,
+    targetRef: release.tag,
+    releaseUrl: release.releaseUrl,
+    sourceLabel: `${channel === "stable" ? "Stable" : "Prerelease"} ${release.tag}`,
+    downloadedBytes: 0,
+    totalBytes: null,
+  });
+  await deps.downloadFile(release.archiveUrl, archive, (progress) => {
+    reportProgress({ phase: "downloading", ...progress });
+  });
+  reportProgress({ phase: "verifying" });
   await deps.downloadFile(release.sha256Url, checksum);
   verifySha256(archive, parseReleaseChecksum(readFileSync(checksum, "utf8"), release.archiveName));
   const next = join(work, "next");
   mkdirSync(next, { recursive: true });
+  reportProgress({ phase: "extracting" });
   deps.extractZip(archive, next);
   validateReleasePackage(next, release.version);
   return {
@@ -215,6 +259,7 @@ async function prepareCustomUpdate(
   ref: string,
   work: string,
   deps: SelfUpdateDependencies,
+  reportProgress: SelfUpdateProgressReporter,
 ): Promise<PreparedUpdate> {
   validateRepo(repo);
   if (!ref.trim()) throw new Error("Custom update ref is required");
@@ -224,9 +269,21 @@ async function prepareCustomUpdate(
   }
   const archive = join(work, "custom-source.tar.gz");
   const customSource = join(work, "custom-source");
-  await deps.downloadFile(`https://codeload.github.com/${repo}/tar.gz/${encodeURIComponent(ref)}`, archive);
+  reportProgress({
+    phase: "downloading",
+    sourceLabel: `${repo}@${ref}`,
+    downloadedBytes: 0,
+    totalBytes: null,
+  });
+  await deps.downloadFile(
+    `https://codeload.github.com/${repo}/tar.gz/${encodeURIComponent(ref)}`,
+    archive,
+    (progress) => reportProgress({ phase: "downloading", ...progress }),
+  );
   mkdirSync(customSource, { recursive: true });
+  reportProgress({ phase: "extracting" });
   deps.extractTar(archive, customSource);
+  reportProgress({ phase: "building" });
   runCustomBuildStep(deps, toolchain.npm, ["ci", "--workspaces", "--include-workspace-root", "--ignore-scripts"], customSource);
   runCustomBuildStep(deps, toolchain.npm, ["test"], customSource);
   runCustomBuildStep(deps, toolchain.npm, ["run", "package:windows"], customSource);
@@ -239,9 +296,16 @@ async function prepareCustomUpdate(
   if (!existsSync(builtArchive) || !existsSync(checksum)) {
     throw new Error(`Custom build failed: ${archiveName} and its checksum were not produced`);
   }
+  reportProgress({
+    phase: "verifying",
+    latestVersion: customVersion,
+    targetRef: ref,
+    sourceLabel: `${repo}@${ref}`,
+  });
   verifySha256(builtArchive, parseReleaseChecksum(readFileSync(checksum, "utf8"), archiveName));
   const next = join(work, "next");
   mkdirSync(next, { recursive: true });
+  reportProgress({ phase: "extracting" });
   deps.extractZip(builtArchive, next);
   validateReleasePackage(next, customVersion);
   return {
@@ -429,7 +493,7 @@ function requireOptionValue(argv: string[], index: number, option: string): stri
 const defaultDependencies: SelfUpdateDependencies = {
   now: () => new Date(),
   resolveRelease: (options) => resolveRelease(options),
-  async downloadFile(url, target) {
+  async downloadFile(url, target, onProgress) {
     const response = await fetch(url, {
       headers: { "User-Agent": "claude-plusplus-self-update" },
       redirect: "follow",
@@ -437,7 +501,30 @@ const defaultDependencies: SelfUpdateDependencies = {
     if (!response.ok || !response.body) {
       throw new Error(`Download failed: ${response.status} ${response.statusText}`);
     }
-    await pipeline(response.body, createWriteStream(target));
+    if (!onProgress) {
+      await pipeline(response.body, createWriteStream(target));
+      return;
+    }
+    const totalBytes = parseContentLength(response.headers.get("content-length"));
+    let downloadedBytes = 0;
+    let reportedBytes = 0;
+    let reportedAt = Date.now();
+    onProgress({ downloadedBytes, totalBytes });
+    const tracker = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        downloadedBytes += chunk.byteLength;
+        const now = Date.now();
+        if (downloadedBytes - reportedBytes >= 1024 * 1024 || now - reportedAt >= 250 ||
+          (totalBytes !== null && downloadedBytes >= totalBytes)) {
+          reportedBytes = downloadedBytes;
+          reportedAt = now;
+          onProgress({ downloadedBytes, totalBytes });
+        }
+        callback(null, chunk);
+      },
+    });
+    await pipeline(response.body, tracker, createWriteStream(target));
+    if (reportedBytes !== downloadedBytes) onProgress({ downloadedBytes, totalBytes });
   },
   extractZip(archive, target) {
     runTar(["-xf", archive, "-C", target]);
@@ -460,6 +547,12 @@ const defaultDependencies: SelfUpdateDependencies = {
     };
   },
 };
+
+function parseContentLength(value: string | null): number | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
 
 function runTar(args: string[]): void {
   const executable = process.platform === "win32" ? "tar.exe" : "tar";

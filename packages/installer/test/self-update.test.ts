@@ -150,6 +150,91 @@ test("checking state identifies the updater process that owns it", async () => {
   }
 });
 
+test("persists updater phases and real archive progress before the terminal state", async () => {
+  const fixture = updateFixture();
+  const originalDownload = fixture.deps.downloadFile;
+  const originalExtract = fixture.deps.extractZip;
+  const originalRun = fixture.deps.run;
+  const phases: Array<string | undefined> = [];
+  let downloadState: ReturnType<typeof readSelfUpdateState> = null;
+  try {
+    fixture.deps.downloadFile = async (...args: unknown[]) => {
+      const [url, target, onProgress] = args as [
+        string,
+        string,
+        ((progress: { downloadedBytes: number; totalBytes: number | null }) => void)?,
+      ];
+      phases.push(readSelfUpdateState(fixture.options.paths.selfUpdateStateFile)?.phase);
+      if (!url.endsWith(".sha256")) {
+        onProgress?.({ downloadedBytes: 8, totalBytes: 16 });
+        downloadState = readSelfUpdateState(fixture.options.paths.selfUpdateStateFile);
+      }
+      await originalDownload(url, target);
+    };
+    fixture.deps.extractZip = (archive, target) => {
+      phases.push(readSelfUpdateState(fixture.options.paths.selfUpdateStateFile)?.phase);
+      originalExtract(archive, target);
+    };
+    fixture.deps.run = (command, args, cwd) => {
+      if (args.includes("install")) {
+        phases.push(readSelfUpdateState(fixture.options.paths.selfUpdateStateFile)?.phase);
+      }
+      return originalRun(command, args, cwd);
+    };
+
+    await selfUpdate(fixture.options, fixture.deps);
+
+    assert.deepEqual(phases, ["downloading", "verifying", "extracting", "installing"]);
+    assert.equal(downloadState?.status, "checking");
+    assert.equal(downloadState?.processId, process.pid);
+    assert.equal(downloadState?.downloadedBytes, 8);
+    assert.equal(downloadState?.totalBytes, 16);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("default downloader records exact bytes without inventing an unknown total", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const item of [
+      { contentLength: "16", expectedTotal: 16 },
+      { contentLength: null, expectedTotal: null },
+    ]) {
+      const fixture = updateFixture();
+      const archiveContents = "official archive";
+      const dependencies: Partial<SelfUpdateDependencies> = { ...fixture.deps };
+      delete dependencies.downloadFile;
+      let extractingState: ReturnType<typeof readSelfUpdateState> = null;
+      const originalExtract = dependencies.extractZip;
+      dependencies.extractZip = (archive, target) => {
+        extractingState = readSelfUpdateState(fixture.options.paths.selfUpdateStateFile);
+        originalExtract?.(archive, target);
+      };
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.endsWith(".sha256")) {
+          return new Response(
+            `${sha256(archiveContents)}  claude-plusplus-0.3.0-win-x64.zip\n`,
+            { status: 200 },
+          );
+        }
+        const headers = item.contentLength ? { "Content-Length": item.contentLength } : undefined;
+        return new Response(archiveContents, { status: 200, headers });
+      };
+      try {
+        await selfUpdate(fixture.options, dependencies);
+        assert.equal(extractingState?.downloadedBytes, 16);
+        assert.equal(extractingState?.totalBytes, item.expectedTotal);
+      } finally {
+        fixture.dispose();
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 function updateFixture(overrides: {
   expectedSha?: string;
   archiveContents?: string;
