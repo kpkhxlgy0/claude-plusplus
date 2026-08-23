@@ -7,7 +7,7 @@ should also use semantic version tags so the manager can compare installed and a
 
 ## 0.3.1
 
-Draft release notes: [docs/releases/0.3.1.md](docs/releases/0.3.1.md)
+Release notes: [docs/releases/0.3.1.md](docs/releases/0.3.1.md)
 
 ### Added
 
