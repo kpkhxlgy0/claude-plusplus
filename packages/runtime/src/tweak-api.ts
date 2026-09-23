@@ -8,6 +8,7 @@ import type {
 import { createDiskStorage } from "./storage.js";
 import { createTweakFs } from "./tweak-fs.js";
 import { createClaudeSessionsApiLease } from "./preload/claude-sessions-adapter.js";
+import type { ClaudeSessionsChannelDiscovery } from "./claude-sessions-channels.js";
 import {
   createMainTweakIpc,
   createRendererTweakIpc,
@@ -43,6 +44,7 @@ export interface RendererTweakApiOptions {
   log: TweakLogger;
   storage: RendererStorageBridge;
   ipc: RendererTweakIpcBridge;
+  claudeSessionsChannels?: ClaudeSessionsChannelDiscovery;
 }
 
 export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiLease {
@@ -139,7 +141,9 @@ export function createRendererTweakApiLease(options: RendererTweakApiOptions): T
     options.manifest,
   );
   const claudeSessions = options.manifest.permissions?.includes("claude-sessions")
-    ? createClaudeSessionsApiLease(options.ipc)
+    ? createClaudeSessionsApiLease(options.ipc, options.claudeSessionsChannels ?? {
+      error: "Claude LocalSessions channels are unavailable: discovery was not completed",
+    })
     : undefined;
   const claude = claudeSessions ? { sessions: claudeSessions.api } : undefined;
   return {

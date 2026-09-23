@@ -1,41 +1,46 @@
 import type { ClaudeSessionsApi } from "@claude-plusplus/sdk";
 import type { RendererTweakIpcBridge } from "../tweak-ipc.js";
+import type { ClaudeSessionsChannelDiscovery, ClaudeSessionsChannels } from "../claude-sessions-channels.js";
 
 export interface ClaudeSessionsApiLease {
   api: ClaudeSessionsApi;
   dispose(): void;
 }
 
-const resolveSessionFileChannel =
-  "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_resolveSessionFile";
-const getSessionChannel =
-  "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_getSession";
-const getTranscriptChannel =
-  "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_getTranscript";
-
-export function createClaudeSessionsApiLease(bridge: RendererTweakIpcBridge): ClaudeSessionsApiLease {
+export function createClaudeSessionsApiLease(
+  bridge: RendererTweakIpcBridge,
+  channels: ClaudeSessionsChannelDiscovery | undefined,
+): ClaudeSessionsApiLease {
   let disposed = false;
   const assertActive = (): void => {
     if (disposed) throw new Error("Claude Sessions API lease is disposed");
   };
+  const channel = (method: keyof ClaudeSessionsChannels): string => {
+    assertActive();
+    if (!channels || !isChannelMapping(channels)) {
+      const detail = channels && typeof channels === "object" && "error" in channels &&
+        typeof channels.error === "string"
+        ? channels.error
+        : "Claude LocalSessions channels are unavailable: invalid host mapping";
+      throw new Error(detail);
+    }
+    return channels[method];
+  };
   return {
     api: {
       async resolveFile(sessionId, filePath): Promise<string | null> {
-        assertActive();
-        const result = await bridge.invoke(resolveSessionFileChannel, sessionId, filePath);
+        const result = await bridge.invoke(channel("resolveSessionFile"), sessionId, filePath);
         if (result !== null && typeof result !== "string") {
           throw new Error("Claude resolveSessionFile returned an invalid result");
         }
         return result;
       },
       async resolveReference(sessionId, entryId, label, occurrence, visibleCount): Promise<string | null> {
-        assertActive();
-        const transcript = await bridge.invoke(getTranscriptChannel, sessionId);
+        const transcript = await bridge.invoke(channel("getTranscript"), sessionId);
         return resolveTranscriptReference(transcript, entryId, label, occurrence, visibleCount);
       },
       async getWorkspaceRoot(sessionId): Promise<string | null> {
-        assertActive();
-        const result = await bridge.invoke(getSessionChannel, sessionId);
+        const result = await bridge.invoke(channel("getSession"), sessionId);
         if (result === null) return null;
         if (!isRecord(result)) {
           throw new Error("Claude getSession returned an invalid result");
@@ -52,6 +57,19 @@ export function createClaudeSessionsApiLease(bridge: RendererTweakIpcBridge): Cl
       disposed = true;
     },
   };
+}
+
+function isChannelMapping(value: unknown): value is ClaudeSessionsChannels {
+  if (value === null || typeof value !== "object" || "error" in value) return false;
+  const candidate = value as Partial<ClaudeSessionsChannels>;
+  if (typeof candidate.resolveSessionFile !== "string" || typeof candidate.getSession !== "string" ||
+    typeof candidate.getTranscript !== "string") return false;
+  const prefix = /^\$eipc_message\$_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_\$_claude\.web_\$_/i;
+  const match = prefix.exec(candidate.resolveSessionFile);
+  return match !== null &&
+    candidate.resolveSessionFile === `${match[0]}LocalSessions_$_resolveSessionFile` &&
+    candidate.getSession === `${match[0]}LocalSessions_$_getSession` &&
+    candidate.getTranscript === `${match[0]}LocalSessions_$_getTranscript`;
 }
 
 function resolveTranscriptReference(
@@ -204,7 +222,7 @@ function isUserTurnBoundary(value: unknown): boolean {
 }
 
 function normalizeReferenceLabel(value: string): string {
-  return value.trim().replace(/:(\d+)(?::\d+)?$/, "").toLowerCase();
+  return value.trim().replace(/:\d+(?:[-:]\d+)?$/, "").toLowerCase();
 }
 
 function isLocalFileDestination(destination: string, requestedLabel: string): boolean {

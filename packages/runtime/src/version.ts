@@ -1,4 +1,4 @@
-export const CLAUDE_PLUSPLUS_VERSION = "0.3.2";
+export const CLAUDE_PLUSPLUS_VERSION = "0.3.3";
 
 const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/;
 

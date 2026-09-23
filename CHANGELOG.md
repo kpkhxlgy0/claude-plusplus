@@ -5,6 +5,17 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.3.3
+
+Release notes: [docs/releases/0.3.3.md](docs/releases/0.3.3.md)
+
+### Fixed
+
+- Discover Claude Desktop's active `LocalSessions` IPC channels from its installed host preload, restoring file-reference
+  and workspace lookup after Claude changes its channel identifier.
+- Report an unavailable or ambiguous host channel mapping to permitted Tweaks instead of invoking stale channels.
+- Preserve each original file URL when same-name references use line-range labels and are selected by visible occurrence.
+
 ## 0.3.2
 
 Release notes: [docs/releases/0.3.2.md](docs/releases/0.3.2.md)

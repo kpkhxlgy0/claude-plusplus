@@ -16,6 +16,43 @@ import {
   type TweakUpdateChecker,
 } from "../src/tweak-update.ts";
 
+const hostPrefix = "$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_";
+const hostSource = `var D="${hostPrefix}";({
+  resolveSessionFile(t,n){return e.ipcRenderer.invoke(D+"LocalSessions_$_resolveSessionFile",t,n)},
+  getSession(t){return e.ipcRenderer.invoke(D+"LocalSessions_$_getSession",t)},
+  getTranscript(t){return e.ipcRenderer.invoke(D+"LocalSessions_$_getTranscript",t)}
+});`;
+
+test("management IPC discovers only the three LocalSessions channels from the active host preload", async () => {
+  const fixture = managementFixture([], { hostPreloadSource: hostSource });
+  fixture.install({ async ensure() { throw new Error("unused"); } });
+  try {
+    assert.deepEqual(await fixture.invoke("claudepp:claude-sessions-channels"), {
+      resolveSessionFile: `${hostPrefix}LocalSessions_$_resolveSessionFile`,
+      getSession: `${hostPrefix}LocalSessions_$_getSession`,
+      getTranscript: `${hostPrefix}LocalSessions_$_getTranscript`,
+    });
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("management IPC reports missing and ambiguous host channels without guessing", async () => {
+  for (const source of [
+    "var D=\"$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_\";",
+    `${hostSource}\n${hostSource.replaceAll("6b547779-e6d7-4bd0-afe0-b176f52b9b5b", "72d64a8a-c235-400b-bff0-e88c0c5a8408").replaceAll("D+", "E+").replace("var D=", "var E=")}`,
+  ]) {
+    const fixture = managementFixture([], { hostPreloadSource: source });
+    fixture.install({ async ensure() { throw new Error("unused"); } });
+    try {
+      const result = await fixture.invoke("claudepp:claude-sessions-channels") as { error?: string };
+      assert.match(result.error ?? "", /Claude LocalSessions channels are unavailable: (missing|ambiguous)/);
+    } finally {
+      fixture.dispose();
+    }
+  }
+});
+
 test("management IPC persists a valid Tweak toggle before reload and disposes every handler", async () => {
   const fixture = managementFixture([tweak("com.example.toggle")]);
   let persistedBeforeReload = false;
@@ -244,7 +281,7 @@ function tweak(
 
 function managementFixture(
   specs: TweakSpec[],
-  options: { rawConfig?: string; onWarn?: (message: string) => void } = {},
+  options: { rawConfig?: string; onWarn?: (message: string) => void; hostPreloadSource?: string } = {},
 ): {
   install(
     checker: TweakUpdateChecker,
@@ -256,6 +293,8 @@ function managementFixture(
   const root = mkdtempSync(join(tmpdir(), "claudepp-management-ipc-"));
   const tweaksRoot = join(root, "tweaks");
   const configFile = join(root, "config.json");
+  const hostPreloadPath = join(root, "mainView.js");
+  if (options.hostPreloadSource !== undefined) writeFileSync(hostPreloadPath, options.hostPreloadSource);
   mkdirSync(tweaksRoot, { recursive: true });
   for (const spec of specs) {
     const dir = join(tweaksRoot, spec.manifest.id);
@@ -299,6 +338,7 @@ function managementFixture(
         tweaksRoot,
         configFile,
         sourceRoot: join(root, "source"),
+        hostPreloadPath,
         log: { debug() {}, info() {}, warn: options.onWarn ?? (() => {}), error() {} },
         tweakUpdateChecker: checker,
         async reloadTweaks(reason) {

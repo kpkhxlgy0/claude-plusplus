@@ -316,6 +316,11 @@ test("Renderer API only exposes Claude Sessions with its focused permission", as
   const invoked: unknown[][] = [];
   const withPermission = createRendererTweakApiLease({
     manifest: manifest(["claude-sessions"]),
+    claudeSessionsChannels: {
+      resolveSessionFile: "$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_LocalSessions_$_resolveSessionFile",
+      getSession: "$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_LocalSessions_$_getSession",
+      getTranscript: "$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_LocalSessions_$_getTranscript",
+    },
     log,
     storage: localStorageBridge(new Map()),
     ipc: rendererIpcBridge(async (channel, ...args) => {
@@ -359,16 +364,16 @@ test("Renderer API only exposes Claude Sessions with its focused permission", as
   );
   assert.deepEqual(invoked, [
     [
-      "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_resolveSessionFile",
+      "$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_LocalSessions_$_resolveSessionFile",
       "local-session-id",
       "Waiting.prefab",
     ],
     [
-      "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_getTranscript",
+      "$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_LocalSessions_$_getTranscript",
       "local-session-id",
     ],
     [
-      "$eipc_message$_72d64a8a-c235-400b-bff0-e88c0c5a8408_$_claude.web_$_LocalSessions_$_getSession",
+      "$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_LocalSessions_$_getSession",
       "local-session-id",
     ],
   ]);

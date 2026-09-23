@@ -15,6 +15,7 @@ import {
   type RendererTweakCatalog,
 } from "./tweak-host.js";
 import type { ListedTweakView } from "../settings/types.js";
+import type { ClaudeSessionsChannelDiscovery } from "../claude-sessions-channels.js";
 
 export async function bootstrapRendererRuntime(
   log: TweakLogger = createRendererLogger(ipcRenderer),
@@ -22,6 +23,18 @@ export async function bootstrapRendererRuntime(
   log.info("Renderer Tweak discovery started");
   setSettingsManagementBridge((channel, ...args) => ipcRenderer.invoke(channel, ...args));
   startSettingsInjector();
+  let claudeSessionsChannels: ClaudeSessionsChannelDiscovery;
+  try {
+    const discovered = await ipcRenderer.invoke("claudepp:claude-sessions-channels") as unknown;
+    claudeSessionsChannels = discovered !== null && typeof discovered === "object"
+      ? discovered as ClaudeSessionsChannelDiscovery
+      : { error: "Claude LocalSessions channels are unavailable: invalid host mapping" };
+  } catch (error) {
+    claudeSessionsChannels = {
+      error: `Claude LocalSessions channels are unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if ("error" in claudeSessionsChannels) log.warn(claudeSessionsChannels.error);
   const runtime = createRendererTweakRuntime({
     loadCatalog: async (): Promise<RendererTweakCatalog> => {
       const [tweaks, paths] = await Promise.all([
@@ -44,6 +57,7 @@ export async function bootstrapRendererRuntime(
     log,
     storage: window.localStorage,
     ipc: ipcRenderer,
+    claudeSessionsChannels,
     settings: { registerSection, registerPage },
   });
   await runtime.start();

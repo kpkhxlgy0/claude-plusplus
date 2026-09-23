@@ -18,6 +18,7 @@ import {
   type TweakApiLease,
 } from "../tweak-lifecycle.js";
 import type { ListedTweakView } from "../settings/types.js";
+import type { ClaudeSessionsChannelDiscovery } from "../claude-sessions-channels.js";
 
 export interface RendererTweakSource {
   manifest: TweakManifest;
@@ -48,6 +49,7 @@ export interface RendererTweakHostOptions {
   log: TweakLogger;
   storage: RendererStorageBridge;
   ipc: RendererTweakIpcBridge;
+  claudeSessionsChannels?: ClaudeSessionsChannelDiscovery;
   settings?: RendererSettingsHost;
 }
 
@@ -86,6 +88,7 @@ export async function startRendererTweaks(options: RendererTweakHostOptions): Pr
       log: options.log,
       storage: options.storage,
       ipc: options.ipc,
+      claudeSessionsChannels: options.claudeSessionsChannels,
     });
     const settingsHandles = new Set<SettingsHandle>();
     const settingsApi = createSettingsApi(item.manifest, options.settings, settingsHandles);
@@ -163,6 +166,7 @@ export function createRendererTweakRuntime(
         log: options.log,
         storage: options.storage,
         ipc: options.ipc,
+        claudeSessionsChannels: options.claudeSessionsChannels,
         ...(options.settings ? { settings: options.settings } : {}),
       });
     };

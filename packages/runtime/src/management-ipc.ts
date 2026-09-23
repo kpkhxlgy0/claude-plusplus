@@ -29,6 +29,7 @@ import {
   type TweakUpdateChecker,
 } from "./tweak-update.js";
 import { getWatcherHealth } from "./watcher-health.js";
+import { activeClaudeHostPreloadPath, discoverClaudeSessionsChannels } from "./claude-sessions-channels.js";
 
 export interface ManagementIpcDeps {
   electron: typeof import("electron");
@@ -36,6 +37,7 @@ export interface ManagementIpcDeps {
   tweaksRoot: string;
   configFile: string;
   sourceRoot: string;
+  hostPreloadPath?: string;
   log: TweakLogger;
   tweakUpdateChecker?: TweakUpdateChecker;
   reloadTweaks(reason: string): Promise<void>;
@@ -89,6 +91,8 @@ export function installManagementIpc(deps: ManagementIpcDeps): () => void {
     tweaksDir: deps.tweaksRoot,
     logDir: join(deps.userRoot, "log"),
   }));
+  register("claudepp:claude-sessions-channels", () =>
+    discoverClaudeSessionsChannels(deps.hostPreloadPath ?? activeClaudeHostPreloadPath()));
   register("claudepp:read-tweak-source", (_event, entryPath) => {
     const entry = validatedChildPath(deps.tweaksRoot, entryPath, "Tweak source");
     return readFileSync(entry, "utf8");

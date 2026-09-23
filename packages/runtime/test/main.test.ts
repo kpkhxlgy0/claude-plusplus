@@ -103,6 +103,7 @@ test("registers every Settings management handler once", async () => {
 
     assert.deepEqual([...handlers.keys()].filter((name) => name.startsWith("claudepp:")).sort(), [
       "claudepp:check-claudepp-update",
+      "claudepp:claude-sessions-channels",
       "claudepp:copy-text",
       "claudepp:get-config",
       "claudepp:get-tweak-store",

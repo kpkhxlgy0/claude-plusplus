@@ -12,6 +12,14 @@ test("built Renderer preload boots when the sandbox only exposes Electron", asyn
       invocations.push([channel, ...args]);
       if (channel === "claudepp:list-tweaks") return [];
       if (channel === "claudepp:user-paths") return { tweaksDir: "D:\\Tweaks" };
+      if (channel === "claudepp:claude-sessions-channels") {
+        const prefix = "$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_LocalSessions_$_";
+        return {
+          resolveSessionFile: `${prefix}resolveSessionFile`,
+          getSession: `${prefix}getSession`,
+          getTranscript: `${prefix}getTranscript`,
+        };
+      }
       if (channel === "claudepp:renderer-log") return true;
       throw new Error(`unexpected IPC channel: ${channel}`);
     },
