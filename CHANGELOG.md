@@ -5,6 +5,17 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.3.4
+
+Release notes: [docs/releases/0.3.4.md](docs/releases/0.3.4.md)
+
+### Fixed
+
+- Launch the managed Claude app with its Windows package identity so Claude can retain its native update controls.
+- Match the current Claude Settings sidebar's selected state, icon alignment, labels, and section spacing.
+- Restore native Settings selection on programmatic return, page removal, and same-row clicks, while respecting newer
+  host selection.
+
 ## 0.3.3
 
 Release notes: [docs/releases/0.3.3.md](docs/releases/0.3.3.md)

@@ -34,8 +34,9 @@ import {
   type ManagedMirrorResult,
   type MirrorFileSystem,
 } from "../windows-store-mirror.js";
+import { installWindowsManagedLauncher, windowsManagedLaunchCommand } from "../windows-launcher.js";
 
-const version = "0.3.3";
+const version = "0.3.4";
 const defaultUpdateRepo = "kpkhxlgy0/claude-plusplus";
 const execFileAsync = promisify(execFile);
 
@@ -50,7 +51,7 @@ export interface InstallCommandOptions {
 
 export interface InstallCommandDeps {
   discover(): Promise<ClaudeInstall>;
-  createShortcut(target: string, shortcut: string): Promise<void>;
+  createShortcut(target: string, shortcut: string, args: string[], icon: string): Promise<void>;
   now(): Date;
   mirrorFileSystem?: MirrorFileSystem;
 }
@@ -115,14 +116,14 @@ export async function installClaudePlusPlus(
       if (currentState !== existingState) {
         writeClaudePlusPlusState(paths.stateFile, currentState);
       }
+      installWindowsManagedLauncher(paths);
+      const launch = windowsManagedLaunchCommand(paths);
+      await createShortcut(launch.command, paths.shortcutFile, launch.args, currentState.managedExecutable);
       if (options.watcher) return { status: "current", state: currentState };
       await copyRuntimeAtomically(
         join(sourceRoot, "packages", "runtime", "dist"),
         paths,
       );
-      if (!existsSync(paths.shortcutFile)) {
-        await createShortcut(existingState.managedExecutable, paths.shortcutFile);
-      }
       if (options.cleanupAllOld) {
         await cleanupOldWindowsStoreMirrors(paths, official.packageFullName);
       }
@@ -161,7 +162,9 @@ export async function installClaudePlusPlus(
     };
     writeClaudePlusPlusState(paths.stateFile, state);
     await prepared.commit();
-    await createShortcut(state.managedExecutable, paths.shortcutFile);
+    installWindowsManagedLauncher(paths);
+    const launch = windowsManagedLaunchCommand(paths);
+    await createShortcut(launch.command, paths.shortcutFile, launch.args, state.managedExecutable);
     if (options.cleanupAllOld) {
       await cleanupOldWindowsStoreMirrors(paths, official.packageFullName);
     }
@@ -262,14 +265,16 @@ async function copyRuntimeAtomically(source: string, paths: ClaudePlusPlusPaths)
   }
 }
 
-async function createWindowsShortcut(target: string, shortcut: string): Promise<void> {
+async function createWindowsShortcut(target: string, shortcut: string, args: string[], icon: string): Promise<void> {
   await mkdir(dirname(shortcut), { recursive: true });
   const script = [
     "$shell = New-Object -ComObject WScript.Shell",
     "$shortcut = $shell.CreateShortcut($env:CLAUDE_PLUSPLUS_SHORTCUT_FILE)",
     "$shortcut.TargetPath = $env:CLAUDE_PLUSPLUS_SHORTCUT_TARGET",
-    "$shortcut.WorkingDirectory = Split-Path -Parent $env:CLAUDE_PLUSPLUS_SHORTCUT_TARGET",
-    "$shortcut.IconLocation = $env:CLAUDE_PLUSPLUS_SHORTCUT_TARGET",
+    "$shortcut.Arguments = $env:CLAUDE_PLUSPLUS_SHORTCUT_ARGS",
+    "$shortcut.WorkingDirectory = Split-Path -Parent $env:CLAUDE_PLUSPLUS_LAUNCHER_FILE",
+    "$shortcut.IconLocation = $env:CLAUDE_PLUSPLUS_SHORTCUT_ICON",
+    "$shortcut.WindowStyle = 7",
     "$shortcut.Save()",
   ].join("; ");
   await execFileAsync(
@@ -281,6 +286,9 @@ async function createWindowsShortcut(target: string, shortcut: string): Promise<
         ...process.env,
         CLAUDE_PLUSPLUS_SHORTCUT_FILE: shortcut,
         CLAUDE_PLUSPLUS_SHORTCUT_TARGET: target,
+        CLAUDE_PLUSPLUS_SHORTCUT_ARGS: args.map((arg) => '"' + arg + '"').join(" "),
+        CLAUDE_PLUSPLUS_LAUNCHER_FILE: args.at(-1),
+        CLAUDE_PLUSPLUS_SHORTCUT_ICON: icon,
       },
     },
   );

@@ -18,7 +18,7 @@ import {
   parseValidateTweakArguments,
 } from "./tweak-arguments.js";
 
-const version = "0.3.3";
+const version = "0.3.4";
 
 const tweakCommandHelp = new Map<string, string>([
   ["create-tweak", `
@@ -103,7 +103,7 @@ async function main(argv: string[]): Promise<void> {
       print(await runWatcherCommand(argv[1]));
       return;
     case "launch":
-      launchClaudePlusPlus();
+      launchClaudePlusPlus(undefined, undefined, argv.slice(1));
       print({ launched: true });
       return;
     case "create-tweak": {

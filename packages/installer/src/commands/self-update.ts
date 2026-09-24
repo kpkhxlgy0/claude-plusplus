@@ -26,7 +26,7 @@ import {
   type SelfUpdateState,
 } from "../state.js";
 
-const version = "0.3.3";
+const version = "0.3.4";
 
 export interface SelfUpdateOptions {
   paths?: ClaudePlusPlusPaths;

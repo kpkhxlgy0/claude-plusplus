@@ -20,6 +20,68 @@ test("mounts two product groups with Claude-native button classes", () => {
   adapter.stop();
 });
 
+test("uses native group spacing and keeps custom icons beside truncated long labels", () => {
+  const fixture = settingsFixture();
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("TWEAKS", [{
+    id: "long-title",
+    title: "A very long Tweak name that must stay inside the settings sidebar",
+    iconSvg: '<svg width="20" height="20"></svg>',
+  }])], () => {});
+
+  const button = fixture.button("long-title");
+  assert.ok(button);
+  const list = button.parentElement?.parentElement;
+  const container = list?.parentElement;
+  const heading = container?.children[0];
+  const icon = button.children[0];
+  const label = button.children[1];
+  assert.equal(container?.className, "flex flex-col gap-sm");
+  assert.equal(list?.className, fixture.nativeList.className);
+  for (const token of fixture.nativeHeading.className.split(" ")) {
+    assert.ok(heading?.className.split(" ").includes(token), `missing heading class ${token}`);
+  }
+  assert.equal(button.className, fixture.claudeCodeButton.className);
+  assert.equal(icon.className, fixture.nativeIcon.className);
+  assert.equal(icon.style.width, "20px");
+  assert.equal(icon.style.height, "20px");
+  assert.equal(icon.innerHTML, '<svg width="20" height="20"></svg>');
+  assert.equal(label.className, fixture.nativeLabel.className);
+  assert.equal(label.textContent, "A very long Tweak name that must stay inside the settings sidebar");
+  adapter.stop();
+});
+
+for (const selectedStyle of ["current", "legacy"] as const) {
+  test(`cleans a cloned ${selectedStyle} selection before activating the injected row`, () => {
+    const fixture = settingsFixture({ selectedButton: "claude-code", selectedStyle });
+    const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+    adapter.start();
+    adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+
+    const button = fixture.button("config");
+    assert.ok(button);
+    assert.ok(!button.className.includes("bg-fill-ghost-selected"));
+    assert.ok(!button.className.includes("bg-alpha-2"));
+    adapter.showPanel("config", () => {});
+
+    assert.ok(button.className.includes("bg-fill-ghost-selected"));
+    assert.ok(!button.className.includes("bg-alpha-2"));
+    assert.equal(button.getAttribute("aria-current"), "page");
+    assert.ok(!fixture.claudeCodeButton.className.includes("bg-fill-ghost-selected"));
+    assert.ok(!fixture.claudeCodeButton.className.includes("bg-alpha-2"));
+    assert.equal(fixture.claudeCodeButton.getAttribute("aria-current"), null);
+
+    fixture.selectNativeButton("general");
+    fixture.click(fixture.generalButton);
+    assert.ok(!button.className.includes("bg-fill-ghost-selected"));
+    assert.equal(button.getAttribute("aria-current"), null);
+    assert.ok(fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+    assert.equal(fixture.generalButton.getAttribute("aria-current"), "page");
+    adapter.stop();
+  });
+}
+
 test("restores native content and remounts once after dialog recreation", () => {
   const fixture = settingsFixture();
   const adapter = createClaudeSettingsShellAdapter(fixture.environment);
@@ -57,6 +119,180 @@ test("stop and native restoration tear down an active panel only once", () => {
   assert.equal(fixture.findPanel(), null);
   assert.equal(fixture.nativeHeader.style.display, "grid");
 });
+
+test("programmatic return restores the native selection and keeps unrelated class updates", () => {
+  const fixture = settingsFixture();
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  adapter.showPanel("config", () => {});
+  assert.ok(!fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.equal(fixture.generalButton.getAttribute("aria-current"), null);
+
+  fixture.generalButton.className += " ring-2";
+  adapter.restoreNative();
+
+  assert.ok(fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.ok(fixture.generalButton.className.includes("ring-2"));
+  assert.ok(!fixture.generalButton.className.includes("hover:bg-fill-ghost-hover"));
+  assert.equal(fixture.generalButton.getAttribute("aria-current"), "page");
+  assert.equal(fixture.findPanel(), null);
+  fixture.discardQueuedMutations();
+  fixture.queueObservedClassMutation(fixture.generalButton);
+  assert.deepEqual(fixture.drainQueuedMutations(4), { turns: 1, pending: false });
+  adapter.stop();
+});
+
+test("stop restores a class-selected native row without inventing aria-current", () => {
+  const fixture = settingsFixture();
+  fixture.generalButton.removeAttribute("aria-current");
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  adapter.showPanel("config", () => {});
+
+  adapter.stop();
+
+  assert.ok(fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.equal(fixture.generalButton.getAttribute("aria-current"), null);
+  assert.equal(fixture.findPanel(), null);
+});
+
+test("programmatic return preserves legacy selected tokens and the original aria-current value", () => {
+  const fixture = settingsFixture({ selectedStyle: "legacy" });
+  fixture.generalButton.setAttribute("aria-current", "step");
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  adapter.showPanel("config", () => {});
+
+  adapter.restoreNative();
+
+  assert.ok(fixture.generalButton.className.includes("bg-alpha-2"));
+  assert.ok(!fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.equal(fixture.generalButton.getAttribute("aria-current"), "step");
+  adapter.stop();
+});
+
+test("removing an active custom page restores the native selected row", () => {
+  const fixture = settingsFixture();
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  adapter.showPanel("config", () => {});
+
+  adapter.setNavigation([], () => {});
+
+  assert.equal(fixture.findPanel(), null);
+  assert.ok(fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.equal(fixture.generalButton.getAttribute("aria-current"), "page");
+  adapter.stop();
+});
+
+test("rebuilding only the injected group keeps the native selection for later return", () => {
+  const fixture = settingsFixture();
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  adapter.showPanel("config", () => {});
+
+  fixture.removeInjectedSettingsGroups();
+  fixture.flushMutation();
+  adapter.restoreNative();
+
+  assert.ok(fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.equal(fixture.generalButton.getAttribute("aria-current"), "page");
+  adapter.stop();
+});
+
+test("latest native selection observed while custom page is active is restored", () => {
+  const fixture = settingsFixture();
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  adapter.showPanel("config", () => {});
+
+  fixture.selectNativeButton("claude-code");
+  fixture.flushMutation();
+  assert.ok(!fixture.claudeCodeButton.className.includes("bg-fill-ghost-selected"));
+  adapter.restoreNative();
+
+  assert.ok(!fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.ok(fixture.claudeCodeButton.className.includes("bg-fill-ghost-selected"));
+  assert.equal(fixture.claudeCodeButton.getAttribute("aria-current"), "page");
+  adapter.stop();
+});
+
+test("programmatic return leaves a newer native selection from React intact", () => {
+  const fixture = settingsFixture();
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  adapter.showPanel("config", () => {});
+
+  fixture.selectNativeButton("claude-code");
+  adapter.restoreNative();
+
+  assert.ok(!fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.ok(fixture.claudeCodeButton.className.includes("bg-fill-ghost-selected"));
+  assert.equal(fixture.claudeCodeButton.getAttribute("aria-current"), "page");
+  adapter.stop();
+});
+
+test("native click waits for React selection instead of restoring the old native row", () => {
+  const fixture = settingsFixture();
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  adapter.showPanel("config", () => {});
+
+  fixture.click(fixture.claudeCodeButton);
+  assert.ok(!fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  fixture.selectNativeButton("claude-code");
+  fixture.flushMutation();
+
+  assert.ok(!fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.ok(fixture.claudeCodeButton.className.includes("bg-fill-ghost-selected"));
+  adapter.stop();
+});
+
+test("clicking the previously selected native row restores it when React keeps the same route", () => {
+  const fixture = settingsFixture();
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  adapter.start();
+  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+  adapter.showPanel("config", () => {});
+  assert.ok(!fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+
+  fixture.click(fixture.generalButton);
+
+  assert.equal(fixture.findPanel(), null);
+  assert.ok(fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+  assert.equal(fixture.generalButton.getAttribute("aria-current"), "page");
+  adapter.stop();
+});
+
+for (const replacement of ["navigation", "dialog"] as const) {
+  test(`${replacement} replacement restores only the new native row`, () => {
+    const fixture = settingsFixture();
+    const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+    adapter.start();
+    adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+    const oldGeneral = fixture.generalButton;
+    adapter.showPanel("config", () => {});
+
+    if (replacement === "navigation") fixture.remountSettingsNavigation();
+    else fixture.remountSettingsShell();
+    fixture.flushMutation();
+    adapter.restoreNative();
+
+    assert.ok(!oldGeneral.isConnected);
+    assert.ok(!oldGeneral.className.includes("bg-fill-ghost-selected"));
+    assert.ok(fixture.generalButton.className.includes("bg-fill-ghost-selected"));
+    assert.equal(fixture.generalButton.getAttribute("aria-current"), "page");
+    adapter.stop();
+  });
+}
 
 test("reports only connected displayed visible positive-area transitions", () => {
   const fixture = settingsFixture({ display: "none", width: 800, height: 600 });

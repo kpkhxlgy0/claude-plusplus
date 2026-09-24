@@ -285,6 +285,8 @@ interface SettingsFixtureOptions {
   visibility?: string;
   width?: number;
   height?: number;
+  selectedButton?: "general" | "claude-code";
+  selectedStyle?: "current" | "legacy";
 }
 
 export function settingsFixture(options: SettingsFixtureOptions = {}) {
@@ -296,6 +298,10 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
   let nav: MiniElement;
   let generalButton: MiniElement;
   let claudeCodeButton: MiniElement;
+  let nativeHeading: MiniElement;
+  let nativeList: MiniElement;
+  let nativeIcon: MiniElement;
+  let nativeLabel: MiniElement;
   let content: MiniElement;
   let nativeHeader: MiniElement;
   let nativeBody: MiniElement;
@@ -304,25 +310,50 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
   let dialogWidth = options.width ?? 800;
   let dialogHeight = options.height ?? 600;
 
+  const setNativeSelection = (selected: "general" | "claude-code", style: "current" | "legacy"): void => {
+    for (const [id, button] of [["general", generalButton], ["claude-code", claudeCodeButton]] as const) {
+      button.className = [
+        "flex h-control w-full items-center gap-sm rounded px-sm text-left text-body cursor-pointer",
+        id === selected
+          ? style === "current"
+            ? "bg-fill-ghost-selected font-medium text-primary"
+            : "bg-alpha-2 font-medium text-primary"
+          : "text-secondary hover:bg-fill-ghost-hover hover:text-primary",
+      ].join(" ");
+      if (id === selected) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
+  };
+
   const createNavigation = (): MiniElement => {
     const nextNav = document.createElement("nav");
     const navBody = document.createElement("div");
-    const nativeList = document.createElement("ul");
+    nativeHeading = document.createElement("div");
+    nativeHeading.className = "px-sm pt-md text-caption text-muted";
+    nativeHeading.textContent = "Personal";
+    nativeList = document.createElement("ul");
+    nativeList.className = "flex flex-col gap-px";
     generalButton = document.createElement("button");
-    generalButton.textContent = "General";
-    generalButton.className = [
-      "flex h-control w-full items-center gap-sm rounded px-sm text-left text-body transition-colors",
-      "cursor-pointer bg-alpha-2 font-medium text-primary",
-    ].join(" ");
-    generalButton.setAttribute("aria-current", "page");
+    const generalIcon = document.createElement("svg");
+    generalIcon.className = "shrink-0 text-secondary";
+    generalIcon.setAttribute("width", "20");
+    generalIcon.setAttribute("height", "20");
+    const generalLabel = document.createElement("span");
+    generalLabel.className = "min-w-0 flex-1 truncate";
+    generalLabel.textContent = "General";
+    generalButton.append(generalIcon, generalLabel);
     claudeCodeButton = document.createElement("button");
-    claudeCodeButton.textContent = "Claude Code";
-    claudeCodeButton.className = [
-      "flex h-control w-full items-center gap-sm rounded px-sm text-left text-body transition-colors",
-      "cursor-pointer text-secondary hover:bg-fill-ghost-hover hover:text-primary",
-    ].join(" ");
+    nativeIcon = document.createElement("svg");
+    nativeIcon.className = "shrink-0 text-secondary";
+    nativeIcon.setAttribute("width", "20");
+    nativeIcon.setAttribute("height", "20");
+    nativeLabel = document.createElement("span");
+    nativeLabel.className = "min-w-0 flex-1 truncate";
+    nativeLabel.textContent = "Claude Code";
+    claudeCodeButton.append(nativeIcon, nativeLabel);
+    setNativeSelection(options.selectedButton ?? "general", options.selectedStyle ?? "current");
     nativeList.append(generalButton, claudeCodeButton);
-    navBody.append(nativeList);
+    navBody.append(nativeHeading, nativeList);
     nextNav.append(navBody);
     nav = nextNav;
     return nextNav;
@@ -376,6 +407,13 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     get nativeBody() { return nativeBody; },
     get generalButton() { return generalButton; },
     get claudeCodeButton() { return claudeCodeButton; },
+    get nativeHeading() { return nativeHeading; },
+    get nativeList() { return nativeList; },
+    get nativeIcon() { return nativeIcon; },
+    get nativeLabel() { return nativeLabel; },
+    selectNativeButton(selected: "general" | "claude-code", style: "current" | "legacy" = "current"): void {
+      setNativeSelection(selected, style);
+    },
     click,
     button(id: string): MiniElement | null {
       return document.querySelector(`[data-claudepp-settings-page="${id}"]`);

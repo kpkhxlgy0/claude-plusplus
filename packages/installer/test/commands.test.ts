@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import * as asar from "@electron/asar";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
@@ -44,6 +45,7 @@ import {
   type ClaudePlusPlusStateV2,
 } from "../src/state.ts";
 import type { MirrorFileSystem } from "../src/windows-store-mirror.ts";
+import { WINDOWS_MANAGED_LAUNCHER } from "../src/windows-launcher.ts";
 import type {
   InspectWatcherOptions,
   WatcherInspection,
@@ -74,7 +76,9 @@ test("installs a real managed mirror, Loader, Runtime, state, and shortcut idemp
     assert.equal(state.watcher, "none");
     assert.equal(state.packageVersion, "1.0.0.0");
     assert.equal(readFileSync(join(fixture.paths.runtime, "main.js"), "utf8"), "module.exports = {};\n");
-    assert.equal(readFileSync(fixture.paths.shortcutFile, "utf8"), state.managedExecutable);
+    const shortcut = JSON.parse(readFileSync(fixture.paths.shortcutFile, "utf8"));
+    assert.match(shortcut.target, /powershell\.exe/i);
+    assert.ok(shortcut.args.includes(join(fixture.paths.roamingRoot, "bin", WINDOWS_MANAGED_LAUNCHER)));
     assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.originalMain, ".vite/build/index.pre.js");
     assert.equal(readFixtureFuse(state.managedExecutable, 4), "0");
 
@@ -88,6 +92,64 @@ test("installs a real managed mirror, Loader, Runtime, state, and shortcut idemp
     assert.equal(maintained.originalAsarHash, state.originalAsarHash);
     assert.equal(readFileSync(join(state.managedAppRoot, "managed-only.txt"), "utf8"), "keep");
     assert.equal(existsSync(join(state.managedAppRoot, "late-official.txt")), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("current install and repair refresh a stale package launcher without changing the patch", async () => {
+  const fixture = await createFixture();
+  try {
+    const first = await installClaudePlusPlus(fixture.options, fixture.deps);
+    const launcher = join(fixture.paths.roamingRoot, "bin", WINDOWS_MANAGED_LAUNCHER);
+    const expected = readFileSync(launcher, "utf8");
+    const beforeAsar = readFileSync(first.state.asarPath);
+    writeFileSync(launcher, "throw 'obsolete'");
+    writeFileSync(fixture.paths.shortcutFile, first.state.managedExecutable);
+
+    const current = await installClaudePlusPlus(fixture.options, fixture.deps);
+    assert.equal(current.status, "current");
+    assert.equal(readFileSync(launcher, "utf8"), expected);
+    let shortcut = JSON.parse(readFileSync(fixture.paths.shortcutFile, "utf8"));
+    assert.match(shortcut.target, /powershell\.exe/i);
+    assert.ok(shortcut.args.includes(launcher));
+    assert.deepEqual(readFileSync(first.state.asarPath), beforeAsar);
+
+    writeFileSync(launcher, "throw 'obsolete again'");
+    await repairClaudePlusPlus(fixture.options, fixture.deps);
+    assert.equal(readFileSync(launcher, "utf8"), expected);
+    shortcut = JSON.parse(readFileSync(fixture.paths.shortcutFile, "utf8"));
+    assert.ok(shortcut.args.includes(launcher));
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("current install replaces the Start Menu link with a real packaged launcher shortcut", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    rmSync(fixture.paths.shortcutFile, { force: true });
+    const result = await installClaudePlusPlus(fixture.options, {
+      discover: fixture.deps.discover,
+      now: fixture.deps.now,
+    });
+    assert.equal(result.status, "current");
+    const link = fixture.paths.shortcutFile.replace(/'/g, "''");
+    const command = [
+      "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('" + link + "')",
+      "@{target=$s.TargetPath; args=$s.Arguments; icon=$s.IconLocation} | ConvertTo-Json -Compress",
+    ].join("; ");
+    const inspected = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive",
+      "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")],
+    { encoding: "utf8", windowsHide: true, timeout: 30_000 });
+    assert.equal(inspected.status, 0, inspected.stderr);
+    const shortcut = JSON.parse(inspected.stdout);
+    assert.match(shortcut.target, /powershell\.exe/i);
+    assert.ok(shortcut.args.includes(join(fixture.paths.roamingRoot, "bin", WINDOWS_MANAGED_LAUNCHER)));
+    assert.ok(shortcut.icon.includes(result.state.managedExecutable));
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -163,7 +225,7 @@ test("trusted schema 2 non-current maintenance preserves its mirror and original
     assert.ok(maintained?.schemaVersion === 2);
     assert.equal(maintained.originalAsarHash, originalAsarHash);
     assert.equal(readAsarHeaderHash(maintained.asarPath), maintained.patchedAsarHash);
-    assert.equal(inspectClaudePlusPlusLoader(maintained.asarPath)?.metadata.loaderVersion, "0.3.3");
+    assert.equal(inspectClaudePlusPlusLoader(maintained.asarPath)?.metadata.loaderVersion, "0.3.4");
     assert.equal(
       readFileSync(join(fixture.paths.runtime, "main.js"), "utf8"),
       "module.exports = { maintained: true };\n",
@@ -550,7 +612,7 @@ test("repair restores a missing Runtime and a missing Loader", async () => {
     await repairClaudePlusPlus(fixture.options, fixture.deps);
 
     assert.equal(existsSync(join(fixture.paths.runtime, "main.js")), true);
-    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.3.3");
+    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.3.4");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -811,11 +873,13 @@ test("status, debug, doctor, and launch expose the managed installation safely",
       }),
     );
     let launched = "";
+    let launchArgs: string[] = [];
     let detached = false;
 
-    launchClaudePlusPlus(fixture.paths, (executable) => ({
+    launchClaudePlusPlus(fixture.paths, (executable, args) => ({
       unref() {
         launched = executable;
+        launchArgs = args;
         detached = true;
       },
     }));
@@ -853,7 +917,8 @@ test("status, debug, doctor, and launch expose the managed installation safely",
       );
     }
     assert.equal(JSON.stringify(doctor).includes(fixture.root), false);
-    assert.equal(launched, status.managedExecutable);
+    assert.match(launched, /powershell\.exe/i);
+    assert.equal(launchArgs.at(-1), join(fixture.paths.roamingRoot, "bin", WINDOWS_MANAGED_LAUNCHER));
     assert.equal(detached, true);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
@@ -1001,6 +1066,24 @@ test("status and doctor reject a managed app whose integrity fuse is enabled", a
     assert.equal(status.integrityFuseReady, false);
     assert.equal(fuseCheck?.ok, false);
     assert.deepEqual(asarCheck, { name: "asar-hash", ok: true, detail: "matches patched" });
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("uninstall removes only its launcher file from the shared bin directory", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const bin = join(fixture.paths.roamingRoot, "bin");
+    const launcher = join(bin, WINDOWS_MANAGED_LAUNCHER);
+    const other = join(bin, "other-tool.cmd");
+    writeFileSync(other, "keep");
+
+    await uninstallClaudePlusPlus({ paths: fixture.paths }, { uninstallWatcher: () => {} });
+
+    assert.equal(existsSync(launcher), false);
+    assert.equal(readFileSync(other, "utf8"), "keep");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -1305,9 +1388,9 @@ async function createFixture() {
   );
   const deps: InstallCommandDeps = {
     discover: async () => install,
-    createShortcut: async (target, shortcut) => {
+    createShortcut: async (target, shortcut, args) => {
       mkdirSync(dirname(shortcut), { recursive: true });
-      writeFileSync(shortcut, target);
+      writeFileSync(shortcut, JSON.stringify({ target, args }));
     },
     now: () => new Date("2026-08-11T12:00:00.000Z"),
   };

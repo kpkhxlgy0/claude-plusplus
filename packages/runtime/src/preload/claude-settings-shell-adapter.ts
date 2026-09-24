@@ -51,12 +51,18 @@ interface SettingsShell {
   content: HTMLElement;
 }
 
-const activeNavigationClasses = ["bg-alpha-2", "font-medium", "text-primary"];
+const activeNavigationClasses = ["bg-fill-ghost-selected", "font-medium", "text-primary"];
+const legacyActiveNavigationClasses = ["bg-alpha-2", "font-medium", "text-primary"];
 const inactiveNavigationClasses = [
   "text-secondary",
   "hover:bg-fill-ghost-hover",
   "hover:text-primary",
 ];
+const navigationStateClasses = [...new Set([
+  ...activeNavigationClasses,
+  ...legacyActiveNavigationClasses,
+  ...inactiveNavigationClasses,
+])];
 
 export function createClaudeSettingsShellAdapter(
   environment: SettingsShellEnvironment,
@@ -76,6 +82,7 @@ export function createClaudeSettingsShellAdapter(
   let activeTeardown: (() => void) | null = null;
   let panel: HTMLElement | null = null;
   let documentClick: ((event: Event) => void) | null = null;
+  let nativeSelection: { button: HTMLButtonElement; classes: string[]; ariaCurrent: string | null } | null = null;
   let notifyNavigationMount: (visible: boolean) => void = () => {};
   let notifyVisibility: ((visible: boolean) => void) | null = null;
   let lastVisible = false;
@@ -160,13 +167,15 @@ export function createClaudeSettingsShellAdapter(
     renderActivePanel();
   }
 
-  function restoreNative(): void {
+  function restoreNative(restoreSelection = true): void {
     const wasActive = activeId !== null || activeRender !== null || panel !== null;
     runActiveTeardown();
     restoreShellDom();
     activeId = null;
     activeRender = null;
     syncNavigationActiveState();
+    if (restoreSelection) restoreNativeSelection();
+    else nativeSelection = null;
     if (wasActive) notifyNativeRestored();
   }
 
@@ -199,6 +208,9 @@ export function createClaudeSettingsShellAdapter(
     runActiveTeardown();
     restoreShellDom();
     removeNavigationGroups();
+    if (!shell || shell.dialog !== found.dialog || shell.nav !== found.nav || shell.nativeButton !== found.nativeButton) {
+      nativeSelection = null;
+    }
     shell = found;
     bindResizeObserver(found.dialog);
     navigationKey = null;
@@ -234,23 +246,17 @@ export function createClaudeSettingsShellAdapter(
       if (group.items.length === 0) continue;
       const container = environment.document.createElement("div");
       container.setAttribute("data-claudepp-settings-group", group.id);
+      container.className = "flex flex-col gap-sm";
       const heading = environment.document.createElement("div");
-      heading.style.cssText = [
-        "padding:12px 8px 4px",
-        "font-size:11px",
-        "font-weight:600",
-        "display:flex",
-        "align-items:center",
-        "justify-content:space-between",
-        "gap:8px",
-      ].join(";");
+      heading.className = "flex items-center justify-between gap-sm px-sm pt-md text-caption text-muted";
       const label = environment.document.createElement("span");
       label.setAttribute("data-claudepp-settings-group-label", group.id);
       label.textContent = group.title;
-      label.style.opacity = ".65";
+      label.className = "min-w-0 flex-1 truncate";
       heading.appendChild(label);
       if (group.headerAction) heading.appendChild(createHeaderAction(group.id, group.headerAction));
       const list = environment.document.createElement("ul");
+      list.className = "flex flex-col gap-px";
       for (const item of group.items) list.appendChild(createNavigationItem(item));
       container.append(heading, list);
       shell.navHost.appendChild(container);
@@ -315,10 +321,20 @@ export function createClaudeSettingsShellAdapter(
       const icon = environment.document.createElement("span");
       icon.setAttribute("data-claudepp-settings-icon", "true");
       icon.setAttribute("aria-hidden", "true");
+      icon.className = "shrink-0 text-secondary";
+      Object.assign(icon.style, {
+        display: "inline-flex",
+        width: "20px",
+        height: "20px",
+        flex: "0 0 20px",
+        alignItems: "center",
+        justifyContent: "center",
+      });
       icon.innerHTML = item.iconSvg;
       button.appendChild(icon);
     }
     const label = environment.document.createElement("span");
+    label.className = "min-w-0 flex-1 truncate";
     label.textContent = item.title;
     button.appendChild(label);
     if (item.badge) {
@@ -360,10 +376,32 @@ export function createClaudeSettingsShellAdapter(
     if (!activeId) return;
     for (const button of Array.from(shell.nav.querySelectorAll<HTMLButtonElement>("button"))) {
       if (groupElements.some((group) => group.contains(button))) continue;
-      if (button.getAttribute("aria-current") === "page" || hasAllClasses(button, activeNavigationClasses)) {
+      if (isSelectedNativeButton(button)) {
+        const classes = new Set(button.className.split(/\s+/).filter(Boolean));
+        nativeSelection = {
+          button,
+          classes: navigationStateClasses.filter((className) => classes.has(className)),
+          ariaCurrent: button.getAttribute("aria-current"),
+        };
         setNavigationButtonActive(button, false);
       }
     }
+  }
+
+  function restoreNativeSelection(): void {
+    const selection = nativeSelection;
+    nativeSelection = null;
+    if (!selection || !shell?.nav.contains(selection.button) || !selection.button.isConnected) return;
+    const nativeButtons = Array.from(shell.nav.querySelectorAll<HTMLButtonElement>("button"))
+      .filter((button) => !groupElements.some((group) => group.contains(button)));
+    if (nativeButtons.some(isSelectedNativeButton)) return;
+    const classes = new Set(selection.button.className.split(/\s+/).filter(Boolean));
+    for (const className of navigationStateClasses) classes.delete(className);
+    for (const className of selection.classes) classes.add(className);
+    const nextClassName = [...classes].join(" ");
+    if (selection.button.className !== nextClassName) selection.button.className = nextClassName;
+    if (selection.ariaCurrent === null) selection.button.removeAttribute("aria-current");
+    else selection.button.setAttribute("aria-current", selection.ariaCurrent);
   }
 
   function renderActivePanel(): void {
@@ -453,7 +491,7 @@ export function createClaudeSettingsShellAdapter(
     const control = target?.closest?.("button,a,[role='link']");
     if (!control || !shell.nav.contains(control as Node)) return;
     if (groupElements.some((group) => group.contains(control as Node))) return;
-    restoreNative();
+    restoreNative(control === nativeSelection?.button);
   }
 
   return {
@@ -489,7 +527,9 @@ function findSettingsShell(document: Document): SettingsShell | null {
 
 function setNavigationButtonActive(button: HTMLButtonElement, active: boolean): void {
   const classes = new Set(button.className.split(/\s+/).filter(Boolean));
-  const remove = active ? inactiveNavigationClasses : activeNavigationClasses;
+  const remove = active
+    ? [...inactiveNavigationClasses, ...legacyActiveNavigationClasses]
+    : [...activeNavigationClasses, ...legacyActiveNavigationClasses];
   const add = active ? activeNavigationClasses : inactiveNavigationClasses;
   for (const className of remove) classes.delete(className);
   for (const className of add) classes.add(className);
@@ -505,6 +545,12 @@ function setNavigationButtonActive(button: HTMLButtonElement, active: boolean): 
 function hasAllClasses(button: HTMLButtonElement, required: string[]): boolean {
   const classes = new Set(button.className.split(/\s+/).filter(Boolean));
   return required.every((className) => classes.has(className));
+}
+
+function isSelectedNativeButton(button: HTMLButtonElement): boolean {
+  return button.getAttribute("aria-current") === "page" ||
+    hasAllClasses(button, activeNavigationClasses) ||
+    hasAllClasses(button, legacyActiveNavigationClasses);
 }
 
 function compactLabel(value: string | null): string {

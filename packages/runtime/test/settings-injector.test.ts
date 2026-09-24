@@ -82,7 +82,7 @@ test("moves the selected navigation state from Claude's native page to the injec
 
   assert.equal(injected.getAttribute("aria-current"), "page");
   assert.deepEqual(classTokens(injected), [
-    "bg-alpha-2",
+    "bg-fill-ghost-selected",
     "cursor-pointer",
     "flex",
     "font-medium",
@@ -94,7 +94,6 @@ test("moves the selected navigation state from Claude's native page to the injec
     "text-body",
     "text-left",
     "text-primary",
-    "transition-colors",
     "w-full",
   ]);
   assert.equal(fixture.generalButton.getAttribute("aria-current"), null);
@@ -111,7 +110,6 @@ test("moves the selected navigation state from Claude's native page to the injec
     "text-body",
     "text-left",
     "text-secondary",
-    "transition-colors",
     "w-full",
   ]);
   clearSettingsPages();
