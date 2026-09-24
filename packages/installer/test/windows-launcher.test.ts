@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import test from "node:test";
@@ -55,8 +55,10 @@ test("launcher activates the exact package application and quotes every forwarde
     const args = ["C:\\project with spaces\\", 'a"b', "$(throw 'evaluated')", ""];
     const result = run(launcher, value.paths.localRoot.replace(/\\claude-plusplus$/i, ""), packageStubs(packageName), args);
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), {
-      PackageFamilyName: "Claude_publisher", AppId: "ClaudeApp", Command: value.executable,
+    const { Command: executable, ...parameters } = JSON.parse(result.stdout);
+    assert.equal(realpathSync.native(executable), realpathSync.native(value.executable));
+    assert.deepEqual(parameters, {
+      PackageFamilyName: "Claude_publisher", AppId: "ClaudeApp",
       Args: '"C:\\project with spaces\\\\" "a\\"b" "$(throw \'evaluated\')" ""',
     });
     assert.equal(windowsManagedLaunchCommand(value.paths).args.at(-1), launcher);
@@ -83,7 +85,8 @@ test("launcher follows repaired state and rejects a stale installed package", wi
       managedExecutable: join(nextRoot, "claude.exe"), packageFullName: nextName }));
     const updated = run(launcher, local, packageStubs(nextName));
     assert.equal(updated.status, 0, updated.stderr);
-    assert.equal(JSON.parse(updated.stdout).Command, join(nextRoot, "claude.exe"));
+    assert.equal(realpathSync.native(JSON.parse(updated.stdout).Command),
+      realpathSync.native(join(nextRoot, "claude.exe")));
   } finally {
     cleanup(value.root);
   }
