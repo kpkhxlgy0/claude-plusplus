@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-20T04:28:53Z",
+  "generatedAt": "2026-10-08T12:57:11.328Z",
   "entries": [
     {
       "id": "com.kpk.claude-api-skill-override",
@@ -37,6 +37,41 @@
       "platforms": [
         "win32"
       ]
+    },
+    {
+      "id": "com.kpk.claude-desktop-update-check",
+      "manifest": {
+        "id": "com.kpk.claude-desktop-update-check",
+        "name": "Claude 更新检查",
+        "version": "0.1.1",
+        "description": "手动查询 Claude Desktop 的可用版本和更新说明，不下载或安装更新。",
+        "author": "KPK",
+        "homepage": "https://github.com/kpkhxlgy0/claude-desktop-update-check",
+        "iconUrl": "./icon.png",
+        "tags": [
+          "updates",
+          "version",
+          "settings"
+        ],
+        "githubRepo": "kpkhxlgy0/claude-desktop-update-check",
+        "minRuntime": "0.3.4",
+        "scope": "both",
+        "main": "index.js",
+        "permissions": [
+          "settings",
+          "ipc",
+          "network"
+        ]
+      },
+      "repo": "kpkhxlgy0/claude-desktop-update-check",
+      "approvedCommitSha": "af2e175bf423ee3deb16773c75066dd201df881e",
+      "approvedAt": "2026-10-08T12:57:11.328Z",
+      "approvedBy": "Codex (reviewed and published for KPK)",
+      "platforms": [
+        "win32"
+      ],
+      "releaseUrl": "https://github.com/kpkhxlgy0/claude-desktop-update-check/releases/tag/v0.1.1",
+      "reviewUrl": "https://github.com/kpkhxlgy0/claude-plusplus/issues/3"
     },
     {
       "id": "com.kpk.claude-session-title",
