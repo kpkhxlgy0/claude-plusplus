@@ -82,23 +82,49 @@ for (const selectedStyle of ["current", "legacy"] as const) {
   });
 }
 
-test("restores native content and remounts once after dialog recreation", () => {
-  const fixture = settingsFixture();
-  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
-  adapter.start();
-  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
-  adapter.showPanel("config", (root) => {
-    root.textContent = "Config body";
-  });
+for (const layout of ["direct", "contents", "contents-with-top-row"] as const) {
+  test(`${layout} settings restore native content and remount once after dialog recreation`, () => {
+    const fixture = settingsFixture({ layout });
+    const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+    adapter.start();
+    adapter.setNavigation([
+      group("CLAUDE++", [{ id: "config", title: "Config" }]),
+      group("TWEAKS", [{ id: "example", title: "Example Tweak" }]),
+    ], (id) => adapter.showPanel(id, (root) => {
+      root.textContent = "Config body";
+    }));
 
-  fixture.remountSettingsShell();
-  fixture.flushMutation();
-  assert.equal(fixture.countButtons("config"), 1);
-  fixture.click(fixture.generalButton);
-  assert.equal(fixture.findPanel(), null);
-  assert.equal(fixture.nativeBody.style.display, "");
-  adapter.stop();
-});
+    assert.deepEqual(fixture.groupLabels(), ["CLAUDE++", "TWEAKS"]);
+    fixture.click(fixture.button("config"));
+    assert.equal(fixture.findPanel()?.textContent, "Config body");
+    assert.equal(fixture.findPanel()?.parentElement, fixture.content);
+    assert.equal(fixture.nativeHeader.style.display, "none");
+    assert.equal(fixture.nativeBody.style.display, "none");
+    assert.equal(fixture.nativeTopRow?.style.display ?? "", "");
+
+    fixture.click(fixture.generalButton);
+    assert.equal(fixture.findPanel(), null);
+    assert.equal(fixture.nativeHeader.style.display, "grid");
+    assert.equal(fixture.nativeBody.style.display, "");
+
+    fixture.click(fixture.button("config"));
+    fixture.remountSettingsShell();
+    fixture.flushMutation();
+    assert.equal(fixture.countButtons("config"), 1);
+    assert.equal(fixture.countButtons("example"), 1);
+    assert.equal(fixture.findPanel()?.textContent, "Config body");
+    assert.equal(fixture.findPanel()?.parentElement, fixture.content);
+    assert.equal(fixture.nativeHeader.style.display, "none");
+    assert.equal(fixture.nativeBody.style.display, "none");
+    assert.equal(fixture.nativeTopRow?.style.display ?? "", "");
+
+    fixture.click(fixture.generalButton);
+    assert.equal(fixture.findPanel(), null);
+    assert.equal(fixture.nativeHeader.style.display, "grid");
+    assert.equal(fixture.nativeBody.style.display, "");
+    adapter.stop();
+  });
+}
 
 test("stop and native restoration tear down an active panel only once", () => {
   const fixture = settingsFixture();
@@ -416,26 +442,28 @@ test("reports navigation mount state only after attached groups are created or r
   adapter.stop();
 });
 
-test("recovers navigation remounted inside the same visible dialog without a visibility transition", () => {
-  const fixture = settingsFixture();
-  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
-  const mounts: boolean[] = [];
-  const states: boolean[] = [];
-  adapter.setNavigationMountListener((visible) => mounts.push(visible));
-  adapter.start();
-  adapter.setVisibilityListener((visible) => states.push(visible));
-  adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
-  assert.deepEqual(mounts, [true]);
-  assert.deepEqual(states, [true]);
+for (const layout of ["direct", "contents", "contents-with-top-row"] as const) {
+  test(`${layout} settings recover navigation remounted without a visibility transition`, () => {
+    const fixture = settingsFixture({ layout });
+    const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+    const mounts: boolean[] = [];
+    const states: boolean[] = [];
+    adapter.setNavigationMountListener((visible) => mounts.push(visible));
+    adapter.start();
+    adapter.setVisibilityListener((visible) => states.push(visible));
+    adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
+    assert.deepEqual(mounts, [true]);
+    assert.deepEqual(states, [true]);
 
-  fixture.remountSettingsNavigation();
-  fixture.flushMutation();
+    fixture.remountSettingsNavigation();
+    fixture.flushMutation();
 
-  assert.equal(fixture.countButtons("config"), 1);
-  assert.deepEqual(mounts, [true, true]);
-  assert.deepEqual(states, [true]);
-  adapter.stop();
-});
+    assert.equal(fixture.countButtons("config"), 1);
+    assert.deepEqual(mounts, [true, true]);
+    assert.deepEqual(states, [true]);
+    adapter.stop();
+  });
+}
 
 test("same-shell class observation does not self-reschedule", () => {
   const fixture = settingsFixture();

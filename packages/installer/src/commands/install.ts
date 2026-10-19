@@ -36,7 +36,7 @@ import {
 } from "../windows-store-mirror.js";
 import { installWindowsManagedLauncher, windowsManagedLaunchCommand } from "../windows-launcher.js";
 
-const version = "0.3.4";
+const version = "0.3.5";
 const defaultUpdateRepo = "kpkhxlgy0/claude-plusplus";
 const execFileAsync = promisify(execFile);
 

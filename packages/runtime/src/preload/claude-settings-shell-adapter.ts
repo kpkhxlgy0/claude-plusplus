@@ -510,8 +510,15 @@ function findSettingsShell(document: Document): SettingsShell | null {
   const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"][data-cds]');
   for (const dialog of Array.from(dialogs)) {
     const directChildren = Array.from(dialog.children) as HTMLElement[];
-    const nav = directChildren.find((child) => child.tagName === "NAV");
-    const content = directChildren.find((child) => child !== nav && child.tagName === "DIV");
+    // display: contents 保留 DOM 包装层，新版设置将导航和内容放在该层中。
+    const wrapper = directChildren.find((child) =>
+      child.tagName === "DIV" && child.className.split(/\s+/).includes("contents") &&
+      Array.from(child.children).some((nested) => nested.tagName === "NAV"));
+    const layoutChildren = wrapper ? Array.from(wrapper.children) as HTMLElement[] : directChildren;
+    const nav = layoutChildren.find((child) => child.tagName === "NAV");
+    // 新布局的内容面板在可选顶部栏之后；旧布局保持原来的查找顺序。
+    const contentCandidates = wrapper ? layoutChildren.slice().reverse() : layoutChildren;
+    const content = contentCandidates.find((child) => child !== nav && child.tagName === "DIV");
     if (!nav || !content) continue;
     const buttons = Array.from(nav.querySelectorAll<HTMLButtonElement>("button"));
     const labels = buttons.map((button) => compactLabel(button.textContent));

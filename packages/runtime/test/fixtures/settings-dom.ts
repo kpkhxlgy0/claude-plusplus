@@ -281,6 +281,7 @@ const windowEvents = {
 };
 
 interface SettingsFixtureOptions {
+  layout?: "direct" | "contents" | "contents-with-top-row";
   display?: string;
   visibility?: string;
   width?: number;
@@ -295,6 +296,7 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
   windowListeners.clear();
   const document = new MiniDocument();
   let dialog: MiniElement;
+  let shellHost: MiniElement;
   let nav: MiniElement;
   let generalButton: MiniElement;
   let claudeCodeButton: MiniElement;
@@ -305,6 +307,7 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
   let content: MiniElement;
   let nativeHeader: MiniElement;
   let nativeBody: MiniElement;
+  let nativeTopRow: MiniElement | null;
   let dialogDisplay = options.display ?? "block";
   let dialogVisibility = options.visibility ?? "visible";
   let dialogWidth = options.width ?? 800;
@@ -363,15 +366,33 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("data-cds", "settings-dialog");
+    shellHost = dialog;
+    if (options.layout === "contents" || options.layout === "contents-with-top-row") {
+      shellHost = document.createElement("div");
+      shellHost.className = "contents";
+      dialog.appendChild(shellHost);
+    }
     createNavigation();
     content = document.createElement("div");
+    if (options.layout === "contents" || options.layout === "contents-with-top-row") {
+      content.className = "flex min-h-0 min-w-0 flex-1 flex-col bg-surface-2";
+    }
     nativeHeader = document.createElement("header");
     nativeHeader.textContent = "Native heading";
     nativeHeader.style.display = "grid";
     nativeBody = document.createElement("main");
     nativeBody.textContent = "Native body";
     content.append(nativeHeader, nativeBody);
-    dialog.append(nav, content);
+    nativeTopRow = null;
+    shellHost.appendChild(nav);
+    if (options.layout === "contents-with-top-row") {
+      nativeTopRow = document.createElement("div");
+      const heading = document.createElement("span");
+      heading.textContent = "Settings";
+      nativeTopRow.appendChild(heading);
+      shellHost.appendChild(nativeTopRow);
+    }
+    shellHost.appendChild(content);
     document.body.append(dialog);
   };
   mount();
@@ -405,6 +426,7 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     get content() { return content; },
     get nativeHeader() { return nativeHeader; },
     get nativeBody() { return nativeBody; },
+    get nativeTopRow() { return nativeTopRow; },
     get generalButton() { return generalButton; },
     get claudeCodeButton() { return claudeCodeButton; },
     get nativeHeading() { return nativeHeading; },
@@ -497,7 +519,7 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     },
     remountSettingsNavigation(): void {
       nav.remove();
-      dialog.appendChild(createNavigation());
+      shellHost.appendChild(createNavigation());
     },
     remountSettingsShell(): void {
       dialog.remove();
