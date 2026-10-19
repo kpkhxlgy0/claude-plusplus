@@ -463,6 +463,71 @@ test("serves the full Tweak catalog and validated Renderer source through separa
   }
 });
 
+test("Main Tweak IPC broadcasts to independent WebContentsViews with a window-only fallback", async (t) => {
+  for (const allWebContentsAvailable of [true, false]) {
+    await t.test(allWebContentsAvailable ? "all WebContents" : "BrowserWindow fallback", async () => {
+      const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-tweak-broadcast-"));
+      try {
+        const tweakRoot = join(root, "tweaks", "com.example.broadcast");
+        mkdirSync(tweakRoot, { recursive: true });
+        writeFileSync(join(tweakRoot, "manifest.json"), JSON.stringify({
+          ...mainManifest("com.example.broadcast"),
+          permissions: ["ipc"],
+        }));
+        writeFileSync(join(tweakRoot, "index.js"), `module.exports = { start(api) {
+          api.ipc.handle("publish", (state) => api.ipc.send("update-state", state));
+        } };\n`);
+        const handlers = new Map<string, (...args: unknown[]) => unknown>();
+        const windowMessages: unknown[][] = [];
+        const viewMessages: unknown[][] = [];
+        const destroyedMessages: unknown[][] = [];
+        const windowContents = {
+          isDestroyed: () => false,
+          send: (...args: unknown[]) => windowMessages.push(args),
+        };
+        const viewContents = {
+          isDestroyed: () => false,
+          send: (...args: unknown[]) => viewMessages.push(args),
+        };
+        const destroyedContents = {
+          isDestroyed: () => true,
+          send: (...args: unknown[]) => destroyedMessages.push(args),
+        };
+        const electron = Object.assign(fakeElectron(
+          fakeSession(),
+          undefined,
+          undefined,
+          (channel, handler) => handlers.set(channel, handler),
+        ), {
+          BrowserWindow: { getAllWindows: () => [{ webContents: windowContents }] },
+          webContents: allWebContentsAvailable
+            ? { getAllWebContents: () => [windowContents, destroyedContents, viewContents] }
+            : undefined,
+        });
+
+        await bootstrapRuntime({
+          electron,
+          userRoot: root,
+          preloadPath: "C:\\runtime\\preload.js",
+          startupEnvironment: startupEnvironment(root),
+          claudeCodeSettings: codeSettings(root),
+          desktopMcpService: new FakeDesktopMcpService(),
+        });
+        const publish = handlers.get("claudepp:com.example.broadcast:publish");
+        assert.ok(publish);
+        await publish({}, { phase: "ready" });
+
+        const expected = [["claudepp:com.example.broadcast:update-state", { phase: "ready" }]];
+        assert.deepEqual(windowMessages, expected);
+        assert.deepEqual(viewMessages, allWebContentsAvailable ? expected : []);
+        assert.deepEqual(destroyedMessages, []);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 test("reload revokes the old Main MCP lease before starting changed source", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-junction-reload-"));
   try {

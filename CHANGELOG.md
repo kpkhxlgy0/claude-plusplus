@@ -5,6 +5,12 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## Unreleased
+
+### Fixed
+
+- Deliver Main Tweak IPC broadcasts to independent WebContentsViews, restoring update notifications in current Claude.
+
 ## 0.3.5
 
 Release notes: [docs/releases/0.3.5.md](docs/releases/0.3.5.md)

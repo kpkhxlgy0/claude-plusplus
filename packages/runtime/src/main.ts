@@ -204,7 +204,8 @@ function createMainIpcBridge(electron: typeof import("electron")): MainTweakIpcB
     removeListener: (channel, listener) => electron.ipcMain.removeListener(channel, listener),
     handle: (channel, handler) => electron.ipcMain.handle(channel, handler),
     removeHandler: (channel) => electron.ipcMain.removeHandler(channel),
-    getWebContents: () => electron.BrowserWindow?.getAllWindows().map((window) => window.webContents) ?? [],
+    getWebContents: () => electron.webContents?.getAllWebContents?.() ??
+      electron.BrowserWindow?.getAllWindows().map((window) => window.webContents) ?? [],
   } as MainTweakIpcBridge;
 }
 
