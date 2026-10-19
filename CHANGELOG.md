@@ -5,7 +5,9 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
-## Unreleased
+## 0.3.6
+
+Release notes: [docs/releases/0.3.6.md](docs/releases/0.3.6.md)
 
 ### Fixed
 
