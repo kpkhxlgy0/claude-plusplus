@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-19T15:34:44.279Z",
+  "generatedAt": "2026-10-22T09:28:52.995Z",
   "entries": [
     {
       "id": "com.kpk.claude-api-skill-override",
@@ -177,6 +177,40 @@
       "approvedCommitSha": "61ebdfcf598dd47d5380052173972bf4e0ed6551",
       "approvedAt": "2026-08-16T15:00:24Z",
       "approvedBy": "KPK",
+      "platforms": [
+        "win32"
+      ]
+    },
+    {
+      "id": "com.kpk.session-stats",
+      "manifest": {
+        "id": "com.kpk.session-stats",
+        "name": "Session Stats",
+        "version": "0.1.0",
+        "description": "Conversation turns, model steps, estimated TPS, token usage and cache hit below the Claude Code composer.",
+        "author": "KPK",
+        "githubRepo": "kpkhxlgy0/claude-session-stats",
+        "homepage": "https://github.com/kpkhxlgy0/claude-session-stats",
+        "iconUrl": "./icon.svg",
+        "tags": [
+          "session",
+          "tokens",
+          "statistics"
+        ],
+        "minRuntime": "0.3.6",
+        "scope": "both",
+        "main": "index.js",
+        "permissions": [
+          "ipc",
+          "filesystem"
+        ]
+      },
+      "repo": "kpkhxlgy0/claude-session-stats",
+      "approvedCommitSha": "b9246b1dc5bd7717dcee7f9dcb059224d3783cfc",
+      "approvedAt": "2026-10-22T09:28:52.995Z",
+      "approvedBy": "kpkhxlgy0",
+      "releaseUrl": "https://github.com/kpkhxlgy0/claude-session-stats/releases/tag/v0.1.0",
+      "reviewUrl": "https://github.com/kpkhxlgy0/claude-session-stats/commit/b9246b1dc5bd7717dcee7f9dcb059224d3783cfc",
       "platforms": [
         "win32"
       ]
