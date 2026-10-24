@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-24T13:52:02.357Z",
+  "generatedAt": "2026-10-24T15:25:52.737Z",
   "entries": [
     {
       "id": "com.kpk.claude-api-skill-override",
@@ -186,8 +186,8 @@
       "manifest": {
         "id": "com.kpk.session-stats",
         "name": "Session Stats",
-        "version": "0.3.0",
-        "description": "Turns, model steps, estimated TPS, token usage and cache hit for local Claude Code and Remote Control sessions.",
+        "version": "0.4.1",
+        "description": "Turns, model steps, estimated TPS, token usage and cache hit, synchronized through runner snapshots for Remote Control sessions.",
         "author": "KPK",
         "githubRepo": "kpkhxlgy0/claude-session-stats",
         "homepage": "https://github.com/kpkhxlgy0/claude-session-stats",
@@ -207,11 +207,11 @@
         ]
       },
       "repo": "kpkhxlgy0/claude-session-stats",
-      "approvedCommitSha": "68e4cd351d29d90c2fd22aef1d2991b37cd04282",
-      "approvedAt": "2026-10-24T13:52:02.357Z",
+      "approvedCommitSha": "c58e569e40c34faa45f190f65198246f3494da23",
+      "approvedAt": "2026-10-24T15:25:52.737Z",
       "approvedBy": "Codex (reviewed and published for KPK)",
-      "releaseUrl": "https://github.com/kpkhxlgy0/claude-session-stats/releases/tag/v0.3.0",
-      "reviewUrl": "https://github.com/kpkhxlgy0/claude-session-stats/commit/68e4cd351d29d90c2fd22aef1d2991b37cd04282",
+      "releaseUrl": "https://github.com/kpkhxlgy0/claude-session-stats/releases/tag/v0.4.1",
+      "reviewUrl": "https://github.com/kpkhxlgy0/claude-session-stats/commit/c58e569e40c34faa45f190f65198246f3494da23",
       "platforms": [
         "win32"
       ]
