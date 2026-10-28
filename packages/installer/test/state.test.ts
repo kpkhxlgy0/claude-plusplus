@@ -42,6 +42,16 @@ test("state reader accepts schema 1 and strict schema 2 hashes", () => {
   });
 });
 
+test("state reader preserves an optional installed source binding in both schemas", () => {
+  for (const fixture of [schema1Fixture, schema2Fixture]) {
+    withStateFile({ ...fixture, sourceRoot: "E:\\Local source", nodeRuntimePath: "C:\\Node\\node.exe" }, (file) => {
+      const state = readClaudePlusPlusState(file);
+      assert.equal(state?.sourceRoot, "E:\\Local source");
+      assert.equal(state?.nodeRuntimePath, "C:\\Node\\node.exe");
+    });
+  }
+});
+
 test("state reader rejects malformed schema 2 hashes", () => {
   withStateFile({
     schemaVersion: 2,

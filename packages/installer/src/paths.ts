@@ -1,3 +1,5 @@
+import { readClaudePlusPlusState } from "./state.js";
+
 export interface ClaudePlusPlusPaths {
   roamingRoot: string;
   localRoot: string;
@@ -21,16 +23,18 @@ export function resolveClaudePlusPlusPaths(_env: NodeJS.ProcessEnv = process.env
   const userProfile = requireEnvironmentPath(_env, "USERPROFILE");
   const roamingRoot = win32.join(appData, "claude-plusplus");
   const localRoot = win32.join(localAppData, "claude-plusplus");
+  const stateFile = win32.join(roamingRoot, "state.json");
 
   return {
     roamingRoot,
     localRoot,
-    sourceRoot: win32.join(userProfile, ".claude-plusplus", "source"),
+    sourceRoot: readClaudePlusPlusState(stateFile)?.sourceRoot ??
+      win32.join(userProfile, ".claude-plusplus", "source"),
     runtime: win32.join(roamingRoot, "runtime"),
     tweaks: win32.join(roamingRoot, "tweaks"),
     tweakData: win32.join(roamingRoot, "tweak-data"),
     logs: win32.join(roamingRoot, "log"),
-    stateFile: win32.join(roamingRoot, "state.json"),
+    stateFile,
     selfUpdateStateFile: win32.join(roamingRoot, "self-update.json"),
     configFile: win32.join(roamingRoot, "config.json"),
     storeApps: win32.join(localRoot, "store-apps"),

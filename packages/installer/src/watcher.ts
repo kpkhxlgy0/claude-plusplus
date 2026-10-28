@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { cliLauncherPath, installCliLauncher } from "./cli-launcher.js";
+import { readClaudePlusPlusState } from "./state.js";
 import {
   assertClaudePlusPlusRoamingPath,
   resolveClaudePlusPlusPaths,
@@ -29,7 +31,7 @@ export function installWatcher(
   run: WatcherTaskRunner = runTaskScheduler,
 ): WatcherKind {
   const paths = options.paths ?? resolveClaudePlusPlusPaths();
-  const launcher = options.launcher ?? join(paths.sourceRoot, "bin", "claudeplusplus.cmd");
+  const launcher = options.launcher ?? resolveWatcherLauncher(paths);
   if (!existsSync(launcher)) throw new Error(`Claude++ installed launcher is missing: ${launcher}`);
   const script = writeWatcherScript(paths, launcher);
   const taskCommand = quoteTaskCommand(script);
@@ -66,7 +68,7 @@ export function watcherScriptPath(paths: ClaudePlusPlusPaths): string {
   return join(paths.roamingRoot, "bin", "watcher.cmd");
 }
 
-function writeWatcherScript(paths: ClaudePlusPlusPaths, launcher: string): string {
+export function writeWatcherScript(paths: ClaudePlusPlusPaths, launcher: string): string {
   const script = watcherScriptPath(paths);
   assertClaudePlusPlusRoamingPath(script, paths);
   mkdirSync(dirname(script), { recursive: true });
@@ -79,6 +81,16 @@ function writeWatcherScript(paths: ClaudePlusPlusPaths, launcher: string): strin
     "",
   ].join("\r\n"), "utf8");
   return script;
+}
+
+function resolveWatcherLauncher(paths: ClaudePlusPlusPaths): string {
+  const state = readClaudePlusPlusState(paths.stateFile);
+  const sourceRoot = state?.sourceRoot ?? paths.sourceRoot;
+  const bundledNode = join(sourceRoot, "toolchain", "node.exe");
+  const node = state?.nodeRuntimePath ?? (existsSync(bundledNode) ? bundledNode : null);
+  if (node) return installCliLauncher(paths, sourceRoot, node);
+  const stableLauncher = cliLauncherPath(paths);
+  return existsSync(stableLauncher) ? stableLauncher : join(sourceRoot, "bin", "claudeplusplus.cmd");
 }
 
 function quoteBatchArgument(value: string): string {

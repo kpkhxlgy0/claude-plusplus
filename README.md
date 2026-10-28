@@ -23,20 +23,38 @@ Download and extract the Windows release, then run `install.ps1`. The release in
 Stable and Prerelease channels do not require a system Node.js or npm installation. The Custom source channel builds
 an explicitly trusted GitHub repository and requires system Node.js 24+.
 
+To install the latest stable Windows release online:
+
+```powershell
+irm https://raw.githubusercontent.com/kpkhxlgy0/claude-plusplus/master/install.ps1 | iex
+```
+
+The online installer downloads the official Windows ZIP and its checksum, verifies SHA-256 before extraction, and
+uses the release's bundled Node.js. Running the online command inside a clone still follows this download path.
+
 To install from source, install Node.js 24 or newer with npm, clone the repository, and run:
 
 ```powershell
 pwsh -File .\install.ps1
 ```
 
-The script builds the checkout with npm before installing it. It does not download or install Node.js; when Node.js
-24+ or npm is unavailable, it prints the requirement and exits without starting installation. A successful source
-install records the exact Node.js executable it used. Settings can reuse that executable for Stable or Prerelease
-updates only while it still exists and reports Node.js 24 or newer; those official update channels do not need npm.
-Re-run `install.ps1` after moving or replacing Node.js. Custom source updates still require both Node.js 24+ and npm.
+Running the saved script builds and installs that exact source tree, including local edits, without copying the
+checkout or its Git metadata into another directory. The script locates the source beside itself, so its absolute
+path also works from another working directory. Local `npm ci` failure stops installation and preserves the lockfile.
+Dependencies may require network access; source installation does not download or install Node.js.
+
+When Node.js 24+ or npm is unavailable, source installation prints the requirement and stops. A successful install
+records its source directory and exact Node.js executable. CLI maintenance, Settings, and an already-enabled Watcher
+follow that binding. Re-run `install.ps1` after moving the checkout or replacing Node.js.
+
+Update a local Git checkout with Git and rerun its saved installer. Manual and automatic source updates refuse to
+replace Git repositories, including with `--force`. Managed-package installation and updates also protect linked
+destinations, unrelated nonempty directories, and previous-source backups. Existing configuration and Tweak data
+remain in the Claude++ user-data directory.
 
 The command name used below is `claudeplusplus`. In an extracted or installed Windows package, its launcher is
-`bin\claudeplusplus.cmd`.
+`bin\claudeplusplus.cmd`. After installation, a stable launcher at
+`%APPDATA%\claude-plusplus\bin\claudeplusplus.cmd` targets the active source and Node.js executable for either mode.
 
 ```text
 claudeplusplus install [--cleanup-all-old]

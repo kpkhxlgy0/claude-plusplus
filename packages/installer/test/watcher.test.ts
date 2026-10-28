@@ -85,6 +85,38 @@ test("repeated enable removes every known task variant before recreating the cur
   }
 });
 
+test("explicit enable generates the stable launcher from recorded local source and Node", () => {
+  const fixture = watcherFixture();
+  try {
+    const paths = fixture.options.paths;
+    const localSource = join(fixture.root, "local source");
+    mkdirSync(join(localSource, "packages", "installer", "dist"), { recursive: true });
+    writeFileSync(join(localSource, "packages", "installer", "dist", "cli.js"), "fixture");
+    writeClaudePlusPlusState(paths.stateFile, { ...installerState(), sourceRoot: localSource, nodeRuntimePath: process.execPath });
+    const commands: string[][] = [];
+    assert.equal(installWatcher({ paths }, (_file, args) => { commands.push(args); }), "scheduled-task");
+    const launcher = join(paths.roamingRoot, "bin", "claudeplusplus.cmd");
+    assert.ok(readFileSync(fixture.script, "utf8").includes(`call "${launcher}" update --watcher`));
+    assert.ok(readFileSync(launcher, "utf8").includes(localSource));
+    assert.ok(readFileSync(launcher, "utf8").includes(process.execPath));
+    assert.equal(commands.filter((args) => args[0] === "/Create").length, 2);
+    assert.equal(existsSync(join(localSource, "bin", "claudeplusplus.cmd")), false);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("legacy Watcher enable retains its managed source launcher when no Node binding exists", () => {
+  const fixture = watcherFixture();
+  try {
+    writeClaudePlusPlusState(fixture.options.paths.stateFile, installerState());
+    assert.equal(installWatcher({ paths: fixture.options.paths }, () => {}), "scheduled-task");
+    assert.ok(readFileSync(fixture.script, "utf8").includes(`call "${fixture.options.launcher}" repair`));
+  } finally {
+    fixture.dispose();
+  }
+});
+
 test("disable removes current and legacy Watcher tasks plus the command script", () => {
   const fixture = watcherFixture();
   try {
@@ -152,6 +184,7 @@ function watcherFixture() {
   mkdirSync(join(launcher, ".."), { recursive: true });
   writeFileSync(launcher, "@echo off\r\n");
   return {
+    root,
     options: { paths, launcher },
     script,
     dispose: () => rmSync(root, { recursive: true, force: true }),

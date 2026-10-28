@@ -21,8 +21,10 @@ import {
 import {
   checkClaudePlusPlusUpdate,
   getUpdateConfigView,
+  resolveUpdateNodeRuntime,
   runClaudePlusPlusUpdate,
 } from "./update-service.js";
+import { resolveInstalledSourceRoot } from "./installation-source.js";
 import {
   createTweakUpdateChecker,
   tweakUpdateIdentity,
@@ -190,7 +192,7 @@ export function installManagementIpc(deps: ManagementIpcDeps): () => void {
   register("claudepp:get-watcher-health", () => getWatcherHealth(deps.userRoot));
   register("claudepp:set-watcher-enabled", async (_event, enabled) => {
     if (typeof enabled !== "boolean") throw new Error("Watcher setting is invalid");
-    await runInstallerCommand(deps.sourceRoot, ["watcher", enabled ? "enable" : "disable"]);
+    await runInstallerCommand(deps, ["watcher", enabled ? "enable" : "disable"]);
     if (!enabled) {
       mutateRuntimeConfig(deps.configFile, (config) => {
         config.claudePlusPlus.autoUpdate = false;
@@ -280,12 +282,14 @@ function normalizeUpdateConfig(value: unknown): {
   return output;
 }
 
-function runInstallerCommand(sourceRoot: string, args: string[]): Promise<void> {
-  const node = join(sourceRoot, "toolchain", "node.exe");
+function runInstallerCommand(deps: ManagementIpcDeps, args: string[]): Promise<void> {
+  const stateFile = join(deps.userRoot, "state.json");
+  const sourceRoot = resolveInstalledSourceRoot(stateFile, deps.sourceRoot);
   const cli = join(sourceRoot, "packages", "installer", "dist", "cli.js");
-  if (!existsSync(node) || !existsSync(cli)) {
+  if (!existsSync(cli)) {
     throw new Error("Claude++ installed CLI is unavailable. Run the installer again, then retry.");
   }
+  const node = resolveUpdateNodeRuntime({ sourceRoot, stateFile });
   return new Promise((resolvePromise, reject) => {
     const child = spawn(node, [cli, ...args], {
       cwd: sourceRoot,

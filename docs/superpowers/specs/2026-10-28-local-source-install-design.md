@@ -1,0 +1,9 @@
+# Local source installation and protected updates
+
+The user approved implementing the preceding Claude++/Codex++ comparison. A saved installer in an existing Claude++ source tree must build and install that exact tree, including local edits, without copying it or its Git metadata into the managed source directory. Evaluated online installer text must download and verify the official stable Windows release, using its bundled Node runtime. An extracted release continues to install as a managed package.
+
+Persist the installed `sourceRoot` alongside `nodeRuntimePath` in installer state, with backward-compatible fallback to the legacy managed source path. Bind CLI maintenance, Settings, and an already-enabled Watcher to that recorded source and Node executable. A stable user-data CLI launcher prevents old scheduled commands from retaining a replaced source path. Keep the existing `watcher enable|disable|status` interface: ordinary install/repair never enables scheduled tasks or automatic refresh, and existing explicit Watcher preferences survive maintenance.
+
+Both package installation and self-update must reject replacement of Git roots, Git ancestors/descendants (including `.git` files and case variants), linked destination components, filesystem/home roots, and unrelated nonempty directories. Protect previous-source backups and rollback deletion too; `--force` cannot bypass protection. Local checkouts are maintained through Git and their installer. Downloaded release packages keep the current ZIP/checksum naming and bundled Node behavior.
+
+The implementation stays Windows-only and adds no Bash installer, dependency, version bump, commit, publication, live app reinstall, or change to user configuration. Tests use bounded inert fixtures and mocked network/package-manager/app boundaries, while exercising real installer selection, filesystem transitions, source binding, and update protection.

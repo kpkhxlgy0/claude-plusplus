@@ -12,6 +12,7 @@ interface ClaudePlusPlusStateBase {
   asarPath: string;
   originalMain: string;
   installedAt: string;
+  sourceRoot?: string;
   nodeRuntimePath?: string;
   watcher?: "scheduled-task" | "none";
 }
@@ -149,6 +150,9 @@ function readClaudePlusPlusStateBase(
     asarPath: value.asarPath,
     originalMain: value.originalMain,
     installedAt: value.installedAt,
+    ...(typeof value.sourceRoot === "string" && value.sourceRoot.trim()
+      ? { sourceRoot: value.sourceRoot }
+      : {}),
     ...(typeof value.nodeRuntimePath === "string"
       ? { nodeRuntimePath: value.nodeRuntimePath }
       : {}),

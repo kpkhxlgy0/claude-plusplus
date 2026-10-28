@@ -10,6 +10,7 @@ import { isTweakEnabled, readRuntimeConfig } from "./config.js";
 import { installRendererTweakCspCompatibility } from "./renderer-tweak-csp.js";
 import { TweakManager } from "./tweak-manager.js";
 import { installManagementIpc } from "./management-ipc.js";
+import { resolveInstalledSourceRoot } from "./installation-source.js";
 import {
   initializeStartupEnvironment,
   type StartupEnvironmentService,
@@ -195,7 +196,8 @@ function isPathInside(root: string, candidate: string): boolean {
 
 function defaultSourceRoot(userRoot: string): string {
   const profile = process.env.USERPROFILE?.trim();
-  return profile ? join(profile, ".claude-plusplus", "source") : join(userRoot, "source");
+  const fallback = profile ? join(profile, ".claude-plusplus", "source") : join(userRoot, "source");
+  return resolveInstalledSourceRoot(join(userRoot, "state.json"), fallback);
 }
 
 function createMainIpcBridge(electron: typeof import("electron")): MainTweakIpcBridge {

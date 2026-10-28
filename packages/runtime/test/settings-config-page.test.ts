@@ -19,6 +19,22 @@ test("disables automatic refresh until Watcher is installed", async () => {
   assert.match(root.textContent ?? "", /Enable Watcher.*automatic refresh/i);
 });
 
+test("Copy Command uses the stable roaming CLI launcher", async () => {
+  const fixture = settingsFixture();
+  const root = fixture.environment.document.createElement("div");
+  const copied: string[] = [];
+  const page = context(root, config(), absentWatcher());
+  const defaultInvoke = page.invoke;
+  page.invoke = async <T = unknown>(channel: string, ...args: unknown[]): Promise<T> => {
+    if (channel === "claudepp:copy-text") { copied.push(String(args[0])); return true as T; }
+    return defaultInvoke<T>(channel);
+  };
+  await renderConfigPage(page);
+  fixture.click(findButtonByText(root, "Copy Command"));
+  await flushPromises();
+  assert.deepEqual(copied, ['& "$env:APPDATA\\claude-plusplus\\bin\\claudeplusplus.cmd" uninstall']);
+});
+
 test("shows the Custom Node.js trust warning", async () => {
   const fixture = settingsFixture();
   const root = fixture.environment.document.createElement("div");

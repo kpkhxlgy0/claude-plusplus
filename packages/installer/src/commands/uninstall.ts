@@ -11,6 +11,7 @@ import { assertManagedMirrorPath } from "../windows-store-mirror.js";
 import { uninstallWatcher } from "../watcher.js";
 import { cleanupWindowsManagedArtifacts } from "../windows-cleanup.js";
 import { WINDOWS_MANAGED_LAUNCHER } from "../windows-launcher.js";
+import { cliLauncherPath } from "../cli-launcher.js";
 
 export interface UninstallOptions {
   paths?: ClaudePlusPlusPaths;
@@ -42,6 +43,8 @@ export async function uninstallClaudePlusPlus(
   if (options.purge) assertClaudePlusPlusRoamingPath(paths.roamingRoot, paths, true);
   const launcher = join(paths.roamingRoot, "bin", WINDOWS_MANAGED_LAUNCHER);
   assertClaudePlusPlusRoamingPath(launcher, paths);
+  const cliLauncher = cliLauncherPath(paths);
+  assertClaudePlusPlusRoamingPath(cliLauncher, paths);
 
   cleanupWatcher(paths);
   const warnings = await cleanupManagedArtifacts(paths);
@@ -49,6 +52,7 @@ export async function uninstallClaudePlusPlus(
   await rm(paths.stateFile, { force: true });
   await rm(paths.shortcutFile, { force: true });
   await rm(launcher, { force: true });
+  await rm(cliLauncher, { force: true });
   if (options.purge) await rm(paths.roamingRoot, { recursive: true, force: true });
   return { warnings };
 }

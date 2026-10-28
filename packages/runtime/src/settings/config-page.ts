@@ -290,8 +290,7 @@ function renderMaintenanceSection(context: ConfigPageContext): HTMLElement {
     "Uninstall Claude++",
     "Copy the uninstall command and run it after quitting Claude Desktop.",
   );
-  const command = '& "$env:USERPROFILE\\.claude-plusplus\\source\\toolchain\\node.exe" ' +
-    '"$env:USERPROFILE\\.claude-plusplus\\source\\packages\\installer\\dist\\cli.js" uninstall';
+  const command = '& "$env:APPDATA\\claude-plusplus\\bin\\claudeplusplus.cmd" uninstall';
   uninstall.actions.appendChild(settingsButton(document, "Copy Command", async () => {
     await context.invoke("claudepp:copy-text", command);
   }));

@@ -9,6 +9,7 @@ import {
   type UpdateChannel,
 } from "./config.js";
 import { CLAUDE_PLUSPLUS_VERSION, compareVersions } from "./version.js";
+import { resolveInstalledSourceRoot } from "./installation-source.js";
 
 export const CLAUDE_PLUSPLUS_REPO = "kpkhxlgy0/claude-plusplus";
 
@@ -106,7 +107,7 @@ export function getUpdateConfigView(paths: UpdateServicePaths): ClaudePlusPlusCo
     updateChannel: config.claudePlusPlus.updateChannel,
     updateRepo: config.claudePlusPlus.updateRepo,
     updateRef: config.claudePlusPlus.updateRef,
-    installationSource: describeInstallationSource(paths.sourceRoot),
+    installationSource: describeInstallationSource(resolveInstalledSourceRoot(paths.stateFile, paths.sourceRoot)),
     updateCheck: config.claudePlusPlus.updateCheck ?? null,
     selfUpdate: retryableSelfUpdateView(selfUpdate),
   };
@@ -170,6 +171,7 @@ export async function checkClaudePlusPlusUpdate(
 export async function runClaudePlusPlusUpdate(
   options: RunClaudePlusPlusUpdateOptions,
 ): Promise<{ status: "checking" }> {
+  options = { ...options, sourceRoot: resolveInstalledSourceRoot(options.stateFile, options.sourceRoot) };
   const now = options.now ?? (() => new Date());
   if (isSelfUpdateActive(readSelfUpdateState(options.selfUpdateStateFile), now().getTime())) {
     return { status: "checking" };
@@ -260,7 +262,9 @@ function isProcessRunning(processId: number): boolean {
   }
 }
 
-function resolveUpdateNodeRuntime(options: RunClaudePlusPlusUpdateOptions): string {
+export function resolveUpdateNodeRuntime(
+  options: Pick<RunClaudePlusPlusUpdateOptions, "sourceRoot" | "stateFile" | "probeNodeVersion">,
+): string {
   const bundledNode = join(options.sourceRoot, "toolchain", "node.exe");
   if (existsSync(bundledNode)) return bundledNode;
 

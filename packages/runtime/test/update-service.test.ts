@@ -15,7 +15,7 @@ test("returns the safe default update configuration with no prior result", () =>
   const fixture = updateServiceFixture();
   try {
     const view = getUpdateConfigView(fixture.paths);
-    assert.equal(view.version, "0.3.6");
+    assert.equal(view.version, "0.3.7");
     assert.equal(view.autoUpdate, false);
     assert.equal(view.updateChannel, "stable");
     assert.equal(view.updateRepo, "kpkhxlgy0/claude-plusplus");
@@ -32,8 +32,8 @@ test("checks the selected release for display and persists the result", async ()
     const result = await checkClaudePlusPlusUpdate({
       ...fixture.paths,
       requestReleases: async () => [{
-        tag_name: "v0.3.7",
-        html_url: "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.7",
+        tag_name: "v0.3.8",
+        html_url: "https://github.com/kpkhxlgy0/claude-plusplus/releases/tag/v0.3.8",
         body: "Release notes",
         draft: false,
         prerelease: false,
@@ -41,11 +41,11 @@ test("checks the selected release for display and persists the result", async ()
       now: () => new Date("2026-08-13T00:00:00Z"),
     });
 
-    assert.equal(result.latestVersion, "0.3.7");
+    assert.equal(result.latestVersion, "0.3.8");
     assert.equal(result.updateAvailable, true);
     assert.equal(
       JSON.parse(readFileSync(fixture.paths.configFile, "utf8")).claudePlusPlus.updateCheck.latestVersion,
-      "0.3.7",
+      "0.3.8",
     );
   } finally {
     fixture.dispose();
@@ -58,14 +58,14 @@ test("does not treat an equal-core prerelease as newer than the installed releas
     const result = await checkClaudePlusPlusUpdate({
       ...fixture.paths,
       requestReleases: async () => [{
-        tag_name: "v0.3.6-beta.1",
+        tag_name: "v0.3.7-beta.1",
         draft: false,
         prerelease: true,
       }],
       now: () => new Date("2026-08-13T00:00:00Z"),
     });
 
-    assert.equal(result.latestVersion, "0.3.6-beta.1");
+    assert.equal(result.latestVersion, "0.3.7-beta.1");
     assert.equal(result.updateAvailable, false);
   } finally {
     fixture.dispose();
@@ -157,7 +157,7 @@ test("automatic and forced product checks return results without replacing inval
         const result = await checkClaudePlusPlusUpdate({
           ...fixture.paths,
           force,
-          requestReleases: async () => [release("v0.3.7", false)],
+          requestReleases: async () => [release("v0.3.8", false)],
         });
         assert.equal(result.updateAvailable, true);
         assert.equal(readFileSync(fixture.paths.configFile, "utf8"), raw);
@@ -266,6 +266,24 @@ test("source installs start the updater with their recorded Node.js 24+ runtime"
     assert.deepEqual(result, { status: "checking" });
     assert.equal(launches[0]?.command, nodeRuntimePath);
     assert.deepEqual(launches[0]?.args.slice(-1), ["update"]);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("updates follow the recorded source when the caller still holds the old managed root", async () => {
+  const fixture = updateServiceFixture();
+  try {
+    const sourceRoot = join(fixture.root, "local source");
+    const cli = join(sourceRoot, "packages", "installer", "dist", "cli.js");
+    mkdirSync(join(cli, ".."), { recursive: true });
+    writeFileSync(cli, "fixture");
+    writeFileSync(fixture.paths.stateFile, JSON.stringify({ schemaVersion: 2, sourceRoot, nodeRuntimePath: process.execPath }));
+    const launches: Array<{ command: string; args: string[] }> = [];
+    await runClaudePlusPlusUpdate({ ...fixture.paths, probeNodeVersion: () => "v26.12.1", launch: (command, args) => { launches.push({ command, args }); } });
+    assert.deepEqual(launches, [{ command: process.execPath, args: [cli, "update"] }]);
+    assert.equal(JSON.parse(readFileSync(fixture.paths.selfUpdateStateFile, "utf8")).sourceRoot, sourceRoot);
+    assert.equal(getUpdateConfigView(fixture.paths).installationSource.label, "Source checkout");
   } finally {
     fixture.dispose();
   }

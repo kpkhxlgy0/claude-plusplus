@@ -20,13 +20,14 @@ import {
   type ReleaseDescriptor,
 } from "../release-client.js";
 import { resolveClaudePlusPlusPaths, type ClaudePlusPlusPaths } from "../paths.js";
+import { assertSafeSourceReplacement, UnsafeSourceReplacementError } from "../source-replacement.js";
 import {
   writeSelfUpdateState,
   type SelfUpdateChannel,
   type SelfUpdateState,
 } from "../state.js";
 
-const version = "0.3.6";
+const version = "0.3.7";
 
 export interface SelfUpdateOptions {
   paths?: ClaudePlusPlusPaths;
@@ -120,7 +121,8 @@ export async function selfUpdate(
   dependencies: Partial<SelfUpdateDependencies> = {},
 ): Promise<SelfUpdateState> {
   const paths = options.paths ?? resolveClaudePlusPlusPaths();
-  const sourceRoot = resolve(options.sourceRoot ?? paths.sourceRoot);
+  const requestedSource = options.sourceRoot ?? paths.sourceRoot;
+  const sourceRoot = resolve(requestedSource);
   const config = readUpdateConfig(paths.configFile);
   const selection = resolveSelection(options, config);
   const deps = { ...defaultDependencies, ...dependencies };
@@ -161,11 +163,13 @@ export async function selfUpdate(
     writeSelfUpdateState(paths.selfUpdateStateFile, checkingState);
   };
 
-  const parent = dirname(sourceRoot);
-  mkdirSync(parent, { recursive: true });
-  const work = mkdtempSync(join(parent, `.${basename(sourceRoot)}-update-`));
+  let work: string | null = null;
   let prepared: PreparedUpdate | null = null;
   try {
+    assertSafeSourceReplacement(requestedSource, `${sourceRoot}.previous`);
+    const parent = dirname(sourceRoot);
+    mkdirSync(parent, { recursive: true });
+    work = mkdtempSync(join(parent, `.${basename(sourceRoot)}-update-`));
     prepared = selection.channel === "custom"
       ? await prepareCustomUpdate(selection.repo, selection.ref, work, deps, reportProgress)
       : await prepareOfficialUpdate(selection.channel, selection.repo, work, deps, reportProgress);
@@ -199,7 +203,7 @@ export async function selfUpdate(
     return state;
   } catch (error) {
     const state = createState({
-      status: "failed",
+      status: options.watcher && error instanceof UnsafeSourceReplacementError ? "disabled" : "failed",
       now: deps.now(),
       channel: selection.channel,
       repo: selection.repo,
@@ -209,9 +213,10 @@ export async function selfUpdate(
       error: errorMessage(error),
     });
     writeSelfUpdateState(paths.selfUpdateStateFile, state);
+    if (state.status === "disabled") return state;
     throw error;
   } finally {
-    rmSync(work, { recursive: true, force: true });
+    if (work) rmSync(work, { recursive: true, force: true });
   }
 }
 
@@ -328,14 +333,17 @@ function applyPreparedUpdate(
   const runtimeBackup = join(work, "runtime-backup");
   const hadRuntime = existsSync(paths.runtime);
   if (hadRuntime) cpSync(paths.runtime, runtimeBackup, { recursive: true });
+  assertSafeSourceReplacement(sourceRoot, previousSource, preparedSource);
   rmSync(previousSource, { recursive: true, force: true });
   let movedCurrent = false;
+  let installedPrepared = false;
   try {
     if (existsSync(sourceRoot)) {
       renameSync(sourceRoot, previousSource);
       movedCurrent = true;
     }
     renameSync(preparedSource, sourceRoot);
+    installedPrepared = true;
     const node = join(sourceRoot, "toolchain", "node.exe");
     const cli = join(sourceRoot, "packages", "installer", "dist", "cli.js");
     const result = deps.run(node, [cli, "install"], sourceRoot);
@@ -343,10 +351,13 @@ function applyPreparedUpdate(
       throw new Error(`Claude++ maintenance install failed: ${commandFailure(result)}`);
     }
   } catch (error) {
-    rmSync(sourceRoot, { recursive: true, force: true });
+    assertSafeSourceReplacement(sourceRoot, previousSource);
+    if (installedPrepared) rmSync(sourceRoot, { recursive: true, force: true });
     if (movedCurrent && existsSync(previousSource)) renameSync(previousSource, sourceRoot);
-    rmSync(paths.runtime, { recursive: true, force: true });
-    if (hadRuntime && existsSync(runtimeBackup)) cpSync(runtimeBackup, paths.runtime, { recursive: true });
+    if (installedPrepared) {
+      rmSync(paths.runtime, { recursive: true, force: true });
+      if (hadRuntime && existsSync(runtimeBackup)) cpSync(runtimeBackup, paths.runtime, { recursive: true });
+    }
     throw error;
   }
 }

@@ -74,6 +74,9 @@ test("installs a real managed mirror, Loader, Runtime, state, and shortcut idemp
     assert.notEqual(state.originalAsarHash, state.patchedAsarHash);
     assert.equal(readAsarHeaderHash(state.asarPath), state.patchedAsarHash);
     assert.equal(state.watcher, "none");
+    assert.equal(state.sourceRoot, fixture.options.sourceRoot);
+    assert.equal(existsSync(join(fixture.paths.roamingRoot, "bin", "watcher.cmd")), false);
+    assert.equal(JSON.parse(readFileSync(fixture.paths.configFile, "utf8")).claudePlusPlus.autoUpdate, false);
     assert.equal(state.packageVersion, "1.0.0.0");
     assert.equal(readFileSync(join(fixture.paths.runtime, "main.js"), "utf8"), "module.exports = {};\n");
     const shortcut = JSON.parse(readFileSync(fixture.paths.shortcutFile, "utf8"));
@@ -92,6 +95,87 @@ test("installs a real managed mirror, Loader, Runtime, state, and shortcut idemp
     assert.equal(maintained.originalAsarHash, state.originalAsarHash);
     assert.equal(readFileSync(join(state.managedAppRoot, "managed-only.txt"), "utf8"), "keep");
     assert.equal(existsSync(join(state.managedAppRoot, "late-official.txt")), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("current maintenance rebinds source and Node and migrates only an enabled Watcher script", async () => {
+  const fixture = await createFixture();
+  try {
+    const first = await installClaudePlusPlus(fixture.options, fixture.deps);
+    const script = join(fixture.paths.roamingRoot, "bin", "watcher.cmd");
+    writeFileSync(script, "obsolete launcher");
+    writeFileSync(fixture.paths.stateFile, JSON.stringify({
+      ...first.state,
+      sourceRoot: "C:\\previous-source",
+      nodeRuntimePath: "C:\\previous-node.exe",
+      watcher: "scheduled-task",
+    }));
+    const config = JSON.parse(readFileSync(fixture.paths.configFile, "utf8"));
+    config.claudePlusPlus.autoUpdate = true;
+    config.privateSetting = "keep";
+    writeFileSync(fixture.paths.configFile, JSON.stringify(config));
+    const invocation = join(fixture.root, "watcher-invocations.jsonl");
+    const cli = join(fixture.options.sourceRoot, "packages", "installer", "dist", "cli.js");
+    mkdirSync(dirname(cli), { recursive: true });
+    writeFileSync(cli, `require('node:fs').appendFileSync(${JSON.stringify(invocation)}, JSON.stringify({ args: process.argv.slice(2), node: process.execPath, watcher: process.env.CLAUDE_PLUSPLUS_WATCHER }) + '\\n');`);
+    const before = readFileSync(first.state.asarPath);
+    const current = await installClaudePlusPlus({ ...fixture.options, nodeRuntimePath: process.execPath }, fixture.deps);
+    assert.equal(current.status, "current");
+    assert.equal(current.state.sourceRoot, fixture.options.sourceRoot);
+    assert.equal(current.state.nodeRuntimePath, process.execPath);
+    const launcher = join(fixture.paths.roamingRoot, "bin", "claudeplusplus.cmd");
+    assert.ok(readFileSync(script, "utf8").includes(launcher));
+    const command = readFileSync(launcher, "utf8");
+    assert.ok(command.includes(process.execPath));
+    assert.ok(command.includes(join(fixture.options.sourceRoot, "packages", "installer", "dist", "cli.js")));
+    assert.deepEqual(readFileSync(first.state.asarPath), before);
+    assert.deepEqual(JSON.parse(readFileSync(fixture.paths.configFile, "utf8")), config);
+    assert.equal(existsSync(join(fixture.options.sourceRoot, "bin", "claudeplusplus.cmd")), false);
+    if (process.platform === "win32") {
+      const run = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `""${script}""`], {
+        encoding: "utf8", windowsHide: true, windowsVerbatimArguments: true,
+      });
+      assert.equal(run.status, 0, run.stderr || run.error?.message);
+      assert.deepEqual(readFileSync(invocation, "utf8").trim().split("\n").map((line) => JSON.parse(line)), [
+        { args: ["update", "--watcher"], node: process.execPath, watcher: "1" },
+        { args: ["repair"], node: process.execPath, watcher: "1" },
+      ]);
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("install selects the executing CLI source instead of an existing installed source", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const paths = { ...fixture.paths, sourceRoot: join(fixture.root, "previous source") };
+    const current = await installClaudePlusPlus({ paths }, fixture.deps);
+    assert.equal(current.status, "current");
+    assert.equal(current.state.sourceRoot, resolveInstallerSourceRoot());
+    assert.ok(readFileSync(join(paths.roamingRoot, "bin", "claudeplusplus.cmd"), "utf8").includes(resolveInstallerSourceRoot()));
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("failed current maintenance preserves the previously installed source binding and launcher", async () => {
+  const fixture = await createFixture();
+  try {
+    await installClaudePlusPlus(fixture.options, fixture.deps);
+    const previousState = readFileSync(fixture.paths.stateFile);
+    const launcher = join(fixture.paths.roamingRoot, "bin", "claudeplusplus.cmd");
+    const previousLauncher = readFileSync(launcher);
+    for (const watcher of [false, true]) {
+      await assert.rejects(installClaudePlusPlus({
+        ...fixture.options, sourceRoot: join(fixture.root, "unbuilt source"), watcher,
+      }, fixture.deps), /Built Claude\+\+ Runtime is missing/);
+      assert.deepEqual(readFileSync(fixture.paths.stateFile), previousState);
+      assert.deepEqual(readFileSync(launcher), previousLauncher);
+    }
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -225,7 +309,7 @@ test("trusted schema 2 non-current maintenance preserves its mirror and original
     assert.ok(maintained?.schemaVersion === 2);
     assert.equal(maintained.originalAsarHash, originalAsarHash);
     assert.equal(readAsarHeaderHash(maintained.asarPath), maintained.patchedAsarHash);
-    assert.equal(inspectClaudePlusPlusLoader(maintained.asarPath)?.metadata.loaderVersion, "0.3.6");
+    assert.equal(inspectClaudePlusPlusLoader(maintained.asarPath)?.metadata.loaderVersion, "0.3.7");
     assert.equal(
       readFileSync(join(fixture.paths.runtime, "main.js"), "utf8"),
       "module.exports = { maintained: true };\n",
@@ -612,7 +696,7 @@ test("repair restores a missing Runtime and a missing Loader", async () => {
     await repairClaudePlusPlus(fixture.options, fixture.deps);
 
     assert.equal(existsSync(join(fixture.paths.runtime, "main.js")), true);
-    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.3.6");
+    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.3.7");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -1071,18 +1155,20 @@ test("status and doctor reject a managed app whose integrity fuse is enabled", a
   }
 });
 
-test("uninstall removes only its launcher file from the shared bin directory", async () => {
+test("uninstall removes only its owned launcher files from the shared bin directory", async () => {
   const fixture = await createFixture();
   try {
     await installClaudePlusPlus(fixture.options, fixture.deps);
     const bin = join(fixture.paths.roamingRoot, "bin");
     const launcher = join(bin, WINDOWS_MANAGED_LAUNCHER);
+    const cliLauncher = join(bin, "claudeplusplus.cmd");
     const other = join(bin, "other-tool.cmd");
     writeFileSync(other, "keep");
 
     await uninstallClaudePlusPlus({ paths: fixture.paths }, { uninstallWatcher: () => {} });
 
     assert.equal(existsSync(launcher), false);
+    assert.equal(existsSync(cliLauncher), false);
     assert.equal(readFileSync(other, "utf8"), "keep");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });

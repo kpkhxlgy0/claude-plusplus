@@ -37,6 +37,23 @@ test("management IPC discovers only the three LocalSessions channels from the ac
   }
 });
 
+test("Settings Watcher commands use the recorded source and Node", async () => {
+  const fixture = managementFixture([]);
+  try {
+    const sourceRoot = join(fixture.root, "local source");
+    const cli = join(sourceRoot, "packages", "installer", "dist", "cli.js");
+    const output = join(fixture.root, "invocation.json");
+    mkdirSync(join(cli, ".."), { recursive: true });
+    writeFileSync(cli, `require('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), node: process.execPath }));`);
+    writeFileSync(join(fixture.root, "state.json"), JSON.stringify({ schemaVersion: 2, sourceRoot, nodeRuntimePath: process.execPath }));
+    fixture.install({ async ensure() { throw new Error("unused"); } });
+    await fixture.invoke("claudepp:set-watcher-enabled", false);
+    assert.deepEqual(JSON.parse(readFileSync(output, "utf8")), { argv: ["watcher", "disable"], cwd: sourceRoot, node: process.execPath });
+  } finally {
+    fixture.dispose();
+  }
+});
+
 test("management IPC reports missing and ambiguous host channels without guessing", async () => {
   for (const source of [
     "var D=\"$eipc_message$_6b547779-e6d7-4bd0-afe0-b176f52b9b5b_$_claude.web_$_\";",
@@ -283,6 +300,7 @@ function managementFixture(
   specs: TweakSpec[],
   options: { rawConfig?: string; onWarn?: (message: string) => void; hostPreloadSource?: string } = {},
 ): {
+  root: string;
   install(
     checker: TweakUpdateChecker,
     onReload?: (reason: string, configFile: string) => void,
@@ -322,6 +340,7 @@ function managementFixture(
   let uninstall: (() => void) | undefined;
   let disposed = false;
   return {
+    root,
     install(checker, onReload = () => {}) {
       uninstall = installManagementIpc({
         electron: {

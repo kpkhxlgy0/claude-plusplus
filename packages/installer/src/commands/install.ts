@@ -35,8 +35,10 @@ import {
   type MirrorFileSystem,
 } from "../windows-store-mirror.js";
 import { installWindowsManagedLauncher, windowsManagedLaunchCommand } from "../windows-launcher.js";
+import { installCliLauncher } from "../cli-launcher.js";
+import { writeWatcherScript } from "../watcher.js";
 
-const version = "0.3.6";
+const version = "0.3.7";
 const defaultUpdateRepo = "kpkhxlgy0/claude-plusplus";
 const execFileAsync = promisify(execFile);
 
@@ -110,20 +112,24 @@ export async function installClaudePlusPlus(
 
     if (isCurrent && existingState) {
       await prepared.commit();
-      const currentState: ClaudePlusPlusState = existingState.nodeRuntimePath === nodeRuntimePath
+      if (!options.watcher || existingState.sourceRoot !== sourceRoot) {
+        await copyRuntimeAtomically(
+          join(sourceRoot, "packages", "runtime", "dist"),
+          paths,
+        );
+      }
+      const currentState: ClaudePlusPlusState = existingState.nodeRuntimePath === nodeRuntimePath &&
+        existingState.sourceRoot === sourceRoot
         ? existingState
-        : { ...existingState, nodeRuntimePath };
+        : { ...existingState, sourceRoot, nodeRuntimePath };
       if (currentState !== existingState) {
         writeClaudePlusPlusState(paths.stateFile, currentState);
       }
+      refreshCliBinding(paths, currentState, sourceRoot, nodeRuntimePath);
       installWindowsManagedLauncher(paths);
       const launch = windowsManagedLaunchCommand(paths);
       await createShortcut(launch.command, paths.shortcutFile, launch.args, currentState.managedExecutable);
       if (options.watcher) return { status: "current", state: currentState };
-      await copyRuntimeAtomically(
-        join(sourceRoot, "packages", "runtime", "dist"),
-        paths,
-      );
       if (options.cleanupAllOld) {
         await cleanupOldWindowsStoreMirrors(paths, official.packageFullName);
       }
@@ -157,11 +163,13 @@ export async function installClaudePlusPlus(
       originalAsarHash,
       patchedAsarHash,
       installedAt: now().toISOString(),
+      sourceRoot,
       nodeRuntimePath,
       watcher: existingState?.watcher ?? "none",
     };
     writeClaudePlusPlusState(paths.stateFile, state);
     await prepared.commit();
+    refreshCliBinding(paths, state, sourceRoot, nodeRuntimePath);
     installWindowsManagedLauncher(paths);
     const launch = windowsManagedLaunchCommand(paths);
     await createShortcut(launch.command, paths.shortcutFile, launch.args, state.managedExecutable);
@@ -174,6 +182,16 @@ export async function installClaudePlusPlus(
     await prepared.rollback();
     throw error;
   }
+}
+
+function refreshCliBinding(
+  paths: ClaudePlusPlusPaths,
+  state: ClaudePlusPlusState,
+  sourceRoot: string,
+  nodeRuntimePath: string,
+): void {
+  const launcher = installCliLauncher(paths, sourceRoot, nodeRuntimePath);
+  if (state.watcher === "scheduled-task") writeWatcherScript(paths, launcher);
 }
 
 function trustedPatchedState(

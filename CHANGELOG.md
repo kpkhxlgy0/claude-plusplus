@@ -5,6 +5,24 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.3.7
+
+Release notes: [docs/releases/0.3.7.md](docs/releases/0.3.7.md)
+
+### Changed
+
+- Install a saved source checkout in place, build its local changes, and persist its source and Node.js runtime for
+  CLI, Settings, and existing Watcher maintenance.
+- Add an online Windows installer that validates the official release assets and SHA-256 before using the bundled
+  runtime.
+
+### Fixed
+
+- Honor the first Node.js and npm applications on PATH when multiple installations are available.
+- Keep the stable Windows CLI launcher working with Chinese paths and preserve its arguments and exit status.
+- Protect Git checkouts, linked or unrecognized destinations, and previous-source backups during installation and
+  source updates, including forced updates.
+
 ## 0.3.6
 
 Release notes: [docs/releases/0.3.6.md](docs/releases/0.3.6.md)
