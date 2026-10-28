@@ -186,8 +186,8 @@
       "manifest": {
         "id": "com.kpk.session-stats",
         "name": "Session Stats",
-        "version": "0.5.3",
-        "description": "Turns, model steps, estimated TPS, token usage and cache hit, synchronized through runner snapshots for Remote Control sessions.",
+        "version": "0.6.0",
+        "description": "Session and selected-subagent statistics with estimated TPS, token usage and cache hit, synchronized through Remote Control snapshots.",
         "author": "KPK",
         "githubRepo": "kpkhxlgy0/claude-session-stats",
         "homepage": "https://github.com/kpkhxlgy0/claude-session-stats",
@@ -207,11 +207,11 @@
         ]
       },
       "repo": "kpkhxlgy0/claude-session-stats",
-      "approvedCommitSha": "e0e3890451e9f12167b24b3edcd3e0ea667f4811",
-      "approvedAt": "2026-10-28T12:37:53.002Z",
+      "approvedCommitSha": "b5f08ae8831e0dfa8e093988ef92864aa4426093",
+      "approvedAt": "2026-10-28T14:00:06.6783442Z",
       "approvedBy": "Codex (reviewed and published for KPK)",
-      "releaseUrl": "https://github.com/kpkhxlgy0/claude-session-stats/releases/tag/v0.5.3",
-      "reviewUrl": "https://github.com/kpkhxlgy0/claude-session-stats/commit/e0e3890451e9f12167b24b3edcd3e0ea667f4811",
+      "releaseUrl": "https://github.com/kpkhxlgy0/claude-session-stats/releases/tag/v0.6.0",
+      "reviewUrl": "https://github.com/kpkhxlgy0/claude-session-stats/commit/b5f08ae8831e0dfa8e093988ef92864aa4426093",
       "platforms": [
         "win32"
       ]
