@@ -520,16 +520,27 @@ function findSettingsShell(document: Document): SettingsShell | null {
     const contentCandidates = wrapper ? layoutChildren.slice().reverse() : layoutChildren;
     const content = contentCandidates.find((child) => child !== nav && child.tagName === "DIV");
     if (!nav || !content) continue;
-    const buttons = Array.from(nav.querySelectorAll<HTMLButtonElement>("button"));
-    const labels = buttons.map((button) => compactLabel(button.textContent));
-    const nativeButton = buttons.find((button) => compactLabel(button.textContent) === "Claude Code");
-    if (!nativeButton || !labels.includes("General")) continue;
+    const nativeButton = findNativeSettingsButton(nav);
+    if (!nativeButton) continue;
     const nativeList = nativeButton.closest("ul");
     const navHost = nativeList?.parentElement;
     if (!navHost || navHost.tagName !== "DIV") continue;
     return { dialog, nav, navHost, nativeButton, content };
   }
   return null;
+}
+
+function findNativeSettingsButton(nav: HTMLElement): HTMLButtonElement | null {
+  // Claude keeps the settings row IDs when it renames or translates their labels.
+  const rowButton = (id: string) =>
+    nav.querySelector(`[data-testid="${id}"]`)?.querySelector<HTMLButtonElement>("button");
+  if (rowButton("general-settings")) {
+    const anchor = rowButton("claude-code-settings") ?? rowButton("account-settings");
+    if (anchor) return anchor;
+  }
+  const buttons = Array.from(nav.querySelectorAll<HTMLButtonElement>("button"));
+  if (!buttons.some((button) => compactLabel(button.textContent) === "General")) return null;
+  return buttons.find((button) => compactLabel(button.textContent) === "Claude Code") ?? null;
 }
 
 function setNavigationButtonActive(button: HTMLButtonElement, active: boolean): void {

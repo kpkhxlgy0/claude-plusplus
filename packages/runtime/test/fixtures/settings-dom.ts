@@ -282,6 +282,9 @@ const windowEvents = {
 
 interface SettingsFixtureOptions {
   layout?: "direct" | "contents" | "contents-with-top-row";
+  nativeNavigation?: "legacy" | "test-id";
+  nativeLabels?: { general: string; claudeCode: string; account: string };
+  includeClaudeCode?: boolean;
   display?: string;
   visibility?: string;
   width?: number;
@@ -343,7 +346,8 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     generalIcon.setAttribute("height", "20");
     const generalLabel = document.createElement("span");
     generalLabel.className = "min-w-0 flex-1 truncate";
-    generalLabel.textContent = "General";
+    generalLabel.textContent = options.nativeLabels?.general ??
+      (options.nativeNavigation === "test-id" ? "Appearance" : "General");
     generalButton.append(generalIcon, generalLabel);
     claudeCodeButton = document.createElement("button");
     nativeIcon = document.createElement("svg");
@@ -352,10 +356,26 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     nativeIcon.setAttribute("height", "20");
     nativeLabel = document.createElement("span");
     nativeLabel.className = "min-w-0 flex-1 truncate";
-    nativeLabel.textContent = "Claude Code";
+    nativeLabel.textContent = options.nativeLabels?.claudeCode ??
+      (options.nativeNavigation === "test-id" ? "Code" : "Claude Code");
     claudeCodeButton.append(nativeIcon, nativeLabel);
     setNativeSelection(options.selectedButton ?? "general", options.selectedStyle ?? "current");
-    nativeList.append(generalButton, claudeCodeButton);
+    if (options.nativeNavigation === "test-id") {
+      const appendRow = (id: string, button: MiniElement): void => {
+        const row = document.createElement("li");
+        row.setAttribute("data-testid", id);
+        row.appendChild(button);
+        nativeList.appendChild(row);
+      };
+      appendRow("general-settings", generalButton);
+      const accountButton = document.createElement("button");
+      accountButton.className = claudeCodeButton.className;
+      accountButton.textContent = options.nativeLabels?.account ?? "Account";
+      appendRow("account-settings", accountButton);
+      if (options.includeClaudeCode !== false) appendRow("claude-code-settings", claudeCodeButton);
+    } else {
+      nativeList.append(generalButton, claudeCodeButton);
+    }
     navBody.append(nativeHeading, nativeList);
     nextNav.append(navBody);
     nav = nextNav;

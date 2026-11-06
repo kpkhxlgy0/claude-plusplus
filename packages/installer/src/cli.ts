@@ -18,7 +18,7 @@ import {
   parseValidateTweakArguments,
 } from "./tweak-arguments.js";
 
-const version = "0.3.7";
+const version = "0.3.8";
 
 const tweakCommandHelp = new Map<string, string>([
   ["create-tweak", `

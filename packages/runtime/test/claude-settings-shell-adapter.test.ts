@@ -126,6 +126,66 @@ for (const layout of ["direct", "contents", "contents-with-top-row"] as const) {
   });
 }
 
+for (const scenario of [
+  { name: "Appearance and Code labels", includeClaudeCode: true },
+  {
+    name: "localized native labels",
+    includeClaudeCode: true,
+    nativeLabels: { general: "外观", claudeCode: "代码", account: "账户" },
+  },
+  { name: "Account with the capability-dependent Code row absent", includeClaudeCode: false },
+] as const) {
+  test(`test-id settings with ${scenario.name} open Tweaks and restore native content`, () => {
+    const fixture = settingsFixture({
+      layout: "contents-with-top-row",
+      nativeNavigation: "test-id",
+      ...scenario,
+    });
+    const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+    adapter.start();
+    adapter.setNavigation([
+      group("CLAUDE++", [{ id: "tweaks", title: "Tweaks" }]),
+    ], (id) => adapter.showPanel(id, (root) => {
+      root.textContent = "Installed Tweaks";
+    }));
+
+    assert.deepEqual(fixture.groupLabels(), ["CLAUDE++"]);
+    fixture.click(fixture.button("tweaks"));
+    assert.equal(fixture.findPanel()?.textContent, "Installed Tweaks");
+    assert.equal(fixture.findPanel()?.parentElement, fixture.content);
+    assert.equal(fixture.nativeHeader.style.display, "none");
+    assert.equal(fixture.nativeBody.style.display, "none");
+    assert.equal(fixture.nativeTopRow?.style.display, "");
+
+    fixture.click(fixture.generalButton);
+    assert.equal(fixture.findPanel(), null);
+    assert.equal(fixture.nativeHeader.style.display, "grid");
+    assert.equal(fixture.nativeBody.style.display, "");
+    assert.equal(fixture.nativeTopRow?.style.display, "");
+    adapter.stop();
+  });
+}
+
+test("does not treat Appearance and Code labels without native settings identifiers as Settings", () => {
+  const fixture = settingsFixture({ layout: "contents-with-top-row", nativeNavigation: "test-id" });
+  for (const row of fixture.environment.document.querySelectorAll("[data-testid]")) {
+    row.removeAttribute("data-testid");
+  }
+  const adapter = createClaudeSettingsShellAdapter(fixture.environment);
+  const states: boolean[] = [];
+  adapter.start();
+  adapter.setVisibilityListener((visible) => states.push(visible));
+  adapter.setNavigation([group("CLAUDE++", [{ id: "tweaks", title: "Tweaks" }])], () => {});
+  adapter.showPanel("tweaks", (root) => { root.textContent = "Installed Tweaks"; });
+
+  assert.deepEqual(fixture.groupLabels(), []);
+  assert.equal(fixture.findPanel(), null);
+  assert.deepEqual(states, [false]);
+  assert.equal(fixture.nativeHeader.style.display, "grid");
+  assert.equal(fixture.nativeBody.style.display, "");
+  adapter.stop();
+});
+
 test("stop and native restoration tear down an active panel only once", () => {
   const fixture = settingsFixture();
   const adapter = createClaudeSettingsShellAdapter(fixture.environment);
