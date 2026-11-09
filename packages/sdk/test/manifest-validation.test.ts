@@ -27,6 +27,14 @@ import {
   type TweakStorage,
 } from "../src/index.ts";
 
+test("accepts Main session-stats providers and rejects Renderer-only declarations", () => {
+  for (const scope of ["main", "both", "renderer"]) {
+    const result = validateTweakManifest({ id: "com.example.stats", name: "Stats", version: "0.1.0",
+      githubRepo: "example/stats", scope, permissions: ["session-stats"] });
+    assert.equal(result.ok, scope !== "renderer");
+  }
+});
+
 test("accepts an explicit renderer manifest with Claude Sessions permission", () => {
   const result = validateTweakManifest({
     id: "com.claudeplusplus.probe",
@@ -136,6 +144,7 @@ test("exposes the focused Claude Sessions permission and rejects former private 
     "claude-code-settings",
     "mcp",
     "claude-session-title-write",
+    "session-stats",
   ]);
 
   for (const permission of [

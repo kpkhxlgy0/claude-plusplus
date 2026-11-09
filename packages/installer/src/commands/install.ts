@@ -38,7 +38,7 @@ import { installWindowsManagedLauncher, windowsManagedLaunchCommand } from "../w
 import { installCliLauncher } from "../cli-launcher.js";
 import { writeWatcherScript } from "../watcher.js";
 
-const version = "0.3.8";
+const version = "0.3.9";
 const defaultUpdateRepo = "kpkhxlgy0/claude-plusplus";
 const execFileAsync = promisify(execFile);
 

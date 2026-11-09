@@ -10,6 +10,7 @@ export const VALID_TWEAK_PERMISSIONS = [
   "claude-code-settings",
   "mcp",
   "claude-session-title-write",
+  "session-stats",
 ] as const;
 
 export type TweakScope = (typeof VALID_TWEAK_SCOPES)[number];
@@ -204,6 +205,25 @@ export interface ClaudeApi {
   sessionTitles?: ClaudeSessionTitlesApi;
 }
 
+export interface SessionStatsContext {
+  readonly bridgeSessionId: string;
+  readonly organizationId: string;
+  readonly agentId?: string;
+  readonly signal: AbortSignal;
+}
+
+export type SessionStatsProvider = (
+  context: Readonly<SessionStatsContext>,
+) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
+
+export interface SessionStatsRegistration {
+  unregister(): void;
+}
+
+export interface SessionStatsApi {
+  registerProvider(handler: SessionStatsProvider): SessionStatsRegistration;
+}
+
 export interface TweakApi {
   manifest: Readonly<TweakManifest>;
   storage: TweakStorage;
@@ -214,6 +234,7 @@ export interface TweakApi {
   fs: TweakFs;
   claude?: ClaudeApi;
   mcp?: TweakMcpApi;
+  sessionStats?: SessionStatsApi;
   startupEnvironment?: StartupEnvironmentApi;
   claudeCodeSettings?: ClaudeCodeSettingsApi;
 }
@@ -313,7 +334,7 @@ export function validateTweakManifest(manifest: unknown): TweakManifestValidatio
           });
         }
         if (manifest.scope === "renderer" &&
-          (permission === "mcp" || permission === "claude-session-title-write")) {
+          (permission === "mcp" || permission === "claude-session-title-write" || permission === "session-stats")) {
           errors.push({
             path: `permissions[${index}]`,
             message: "permission requires a Main-capable Tweak scope",

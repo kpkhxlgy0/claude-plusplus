@@ -28,6 +28,11 @@ test("Runtime initializer installs the Desktop observer synchronously before yie
     };
     let bootstrapService: FakeDesktopMcpService | undefined;
     let bootstrapChecker: TweakUpdateChecker | undefined;
+    const sessionStatsService = {
+      installEarly() { calls.push("install-stats-early"); },
+      createApiLease() { throw new Error("unused in initializer test"); },
+      dispose() {},
+    };
 
     initializeRuntimeModule({
       electron: fakeElectron(fakeSession()),
@@ -37,15 +42,17 @@ test("Runtime initializer installs the Desktop observer synchronously before yie
       claudeCodeSettings: codeSettings(root),
       tweakUpdateChecker,
       createDesktopMcpService: () => desktopMcpService,
+      createSessionStatsService: () => sessionStatsService,
       bootstrap: async (deps) => {
         calls.push("bootstrap");
         bootstrapService = deps.desktopMcpService as FakeDesktopMcpService;
         bootstrapChecker = deps.tweakUpdateChecker;
+        assert.equal(deps.sessionStatsService, sessionStatsService);
       },
     });
     calls.push("original-entry");
 
-    assert.deepEqual(calls, ["install-early", "bootstrap", "original-entry"]);
+    assert.deepEqual(calls, ["install-early", "install-stats-early", "bootstrap", "original-entry"]);
     assert.equal(bootstrapService, desktopMcpService);
     assert.equal(bootstrapChecker, tweakUpdateChecker);
   } finally {

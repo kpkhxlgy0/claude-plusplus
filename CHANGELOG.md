@@ -5,6 +5,16 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.3.9
+
+Release notes: [docs/releases/0.3.9.md](docs/releases/0.3.9.md)
+
+### Added
+
+- Add the Main-only `session-stats` provider API and an authenticated, session-bound statistics control request for
+  Claude Desktop `4.23118.0`, with exact-build compatibility guards and revocable provider leases.
+- Validate numeric snapshot envelopes, bound concurrency and request duration, and suppress cancelled or stale replies.
+
 ## 0.3.8
 
 Release notes: [docs/releases/0.3.8.md](docs/releases/0.3.8.md)
