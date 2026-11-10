@@ -36,3 +36,15 @@ As in Codex++, incomplete process/path/state inspection retains old mirrors and 
 - Persisted state bytes and current ASAR bytes remained unchanged. State SHA-256: `CC7B3F6AFC9143A99864B432EFAD4664166F5AA9C238D57068F9DA7DCBBC0079`; ASAR SHA-256: `5D8E8AF639A0F41661A64EE3044B988DCC9B0C986099C8FF1C005A8707956D20`. Runtime and Tweaks remain present. No application install/restart was performed; the installed state still reports 0.3.10.
 - Production Store remained reachable with six entries. No Store entry or Session Stats transport was changed.
 - Packaging reported the same dependency warnings as 0.3.10 (six build-tree and four production-tree vulnerabilities); dependencies were not changed.
+
+## CI temporary-path correction
+
+The initial GitHub Windows run `42779962061` failed 15 cleanup cases (791 passed, one skipped). Its native temporary
+directory was exposed as `C:\Users\RUNNER~1\...`; the cleanup guard correctly rejects ambiguous short path spellings
+before enumerating mirrors. The corresponding Codex++ CI already canonicalizes this runner environment.
+
+Added the same `realpathSync.native(tmpdir())` normalization for `TEMP` and `TMP` to Claude++ CI before installing
+dependencies or running tests. Local reproduction using an actual `PLUSPL~1` temporary-directory alias failed the
+selected native cleanup test as expected. Executing the exact workflow normalization body, then importing its
+`GITHUB_ENV` output, passed all six selected native and install/current/watcher/repair/explicit cleanup cases.
+Production code, safety checks, and packaged bytes are unchanged. The final GitHub run remains the release gate.
