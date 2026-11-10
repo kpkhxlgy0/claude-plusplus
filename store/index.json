@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-10T00:18:12Z",
+  "generatedAt": "2026-11-10T01:56:54Z",
   "entries": [
     {
       "id": "com.kpk.claude-api-skill-override",
@@ -186,7 +186,7 @@
       "manifest": {
         "id": "com.kpk.session-stats",
         "name": "Session Stats",
-        "version": "0.9.0",
+        "version": "0.10.0",
         "description": "Session and selected-subagent statistics with estimated TPS, token usage and cache hit, synchronized through Remote Control snapshots.",
         "author": "KPK",
         "githubRepo": "kpkhxlgy0/claude-session-stats",
@@ -207,11 +207,11 @@
         ]
       },
       "repo": "kpkhxlgy0/claude-session-stats",
-      "approvedCommitSha": "c6b08ceb7c678b9f9051dab718cade5cf85a4bd6",
-      "approvedAt": "2026-11-10T00:18:12Z",
+      "approvedCommitSha": "a3fd14b3c45516295526ebc7dda72e386599c77e",
+      "approvedAt": "2026-11-10T01:56:54Z",
       "approvedBy": "Codex (reviewed and published for KPK)",
-      "releaseUrl": "https://github.com/kpkhxlgy0/claude-session-stats/releases/tag/v0.9.0",
-      "reviewUrl": "https://github.com/kpkhxlgy0/claude-session-stats/commit/c6b08ceb7c678b9f9051dab718cade5cf85a4bd6",
+      "releaseUrl": "https://github.com/kpkhxlgy0/claude-session-stats/releases/tag/v0.10.0",
+      "reviewUrl": "https://github.com/kpkhxlgy0/claude-session-stats/commit/a3fd14b3c45516295526ebc7dda72e386599c77e",
       "platforms": [
         "win32"
       ]
