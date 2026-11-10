@@ -16,6 +16,16 @@ Codex-, Owl-, AppKit-, Metal-, Homebrew-, macOS-, and Linux-specific implementat
 Claude++ is an unofficial, independently maintained modification. It is not an official fork, partnership, or
 runtime dependency of Codex++.
 
+The Windows mirror cleanup implementation is adapted from the maintained Codex++ repository:
+
+- Repository: https://github.com/kpkhxlgy0/codex-plusplus
+- Release tag: `v1.0.10`
+- Commit: `513d55c6531de950a7ea638930bf7b8c032576de`
+- License: MIT License
+
+Claude++ adapts the package identity, installation-state field, and process names; it does not include the
+Codex-specific Windows sandbox service exception.
+
 ## Portable Node.js Runtime
 
 The Windows release contains Node.js v24.19.0 from https://nodejs.org/ so users do not need a system Node.js or npm

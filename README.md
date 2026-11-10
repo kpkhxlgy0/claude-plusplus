@@ -66,8 +66,8 @@ claudeplusplus update --repo owner/repo --ref ref
 claudeplusplus uninstall [--purge]
 ```
 
-- `install` installs or maintains the managed Claude++ mirror. `--cleanup-all-old` removes every non-current managed
-  mirror only after installation succeeds.
+- `install` installs or maintains the managed Claude++ mirror, then safely removes recognized older unused mirrors.
+  `--cleanup-all-old` remains accepted and uses the same safety checks.
 - `watcher enable|disable|status` explicitly manages the logon and five-minute auto-repair tasks.
 - `update` follows the configured Stable channel. Add `--prerelease` for Prerelease, or use `--repo` with `--ref` for
   a trusted Custom source.
@@ -123,9 +123,10 @@ supplies a valid total size; otherwise Settings reports the actual bytes receive
 Claude++ creates and patches only a managed mirror of the official Claude app. It does not modify WindowsApps or the
 Windows registry, and it does not install a localhost service or resident receiver. The Windows release contains its
 own minimal command runtime, so users do not need to install Node.js or npm separately. No native-host component is
-used. Normal install and maintenance retain every old managed mirror, matching Codex++. To remove all non-current
-mirrors after a successful install, run `claudeplusplus install --cleanup-all-old`. Claude++ does not provide a
-previous-version-only cleanup mode. Maintenance preserves config, Tweak Junctions, Tweak data, Safe Mode, enabled
-flags, and old managed mirrors.
+used. After successful install, repair, or maintenance, Claude++ removes only recognized older mirrors with the same
+architecture and publisher as the persisted current mirror, matching Codex++. Current, newer, unknown, linked, and
+in-use mirrors remain. Failed path, state, or process inspection keeps the mirror; cleanup failures warn without
+undoing the install. `claudeplusplus install --cleanup-all-old` uses the same protected cleanup. Maintenance preserves
+config, Tweak Junctions, Tweak data, Safe Mode, and enabled flags.
 
 Claude and Claude Code are products of Anthropic. Claude++ is not affiliated with or endorsed by Anthropic.

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import * as asar from "@electron/asar";
-import { spawnSync } from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
@@ -17,7 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { inspectClaudePlusPlusLoader, readAsarHeaderHash } from "../src/asar.ts";
 import {
   installClaudePlusPlus,
@@ -309,7 +310,7 @@ test("trusted schema 2 non-current maintenance preserves its mirror and original
     assert.ok(maintained?.schemaVersion === 2);
     assert.equal(maintained.originalAsarHash, originalAsarHash);
     assert.equal(readAsarHeaderHash(maintained.asarPath), maintained.patchedAsarHash);
-    assert.equal(inspectClaudePlusPlusLoader(maintained.asarPath)?.metadata.loaderVersion, "0.3.10");
+    assert.equal(inspectClaudePlusPlusLoader(maintained.asarPath)?.metadata.loaderVersion, "0.3.11");
     assert.equal(
       readFileSync(join(fixture.paths.runtime, "main.js"), "utf8"),
       "module.exports = { maintained: true };\n",
@@ -555,7 +556,7 @@ test("backup cleanup failure after state persistence keeps the replacement mirro
   }
 });
 
-test("default install retains every old managed mirror", async () => {
+test("default install retains unrecognized managed mirror directories", async () => {
   const fixture = await createFixture();
   try {
     const oldMirrorA = join(fixture.paths.storeApps, "Claude_old_a");
@@ -574,7 +575,7 @@ test("default install retains every old managed mirror", async () => {
   }
 });
 
-test("explicit all-old cleanup is confined to non-current managed mirror directories", async () => {
+test("explicit all-old cleanup preserves unrecognized managed directories and outside files", async () => {
   const fixture = await createFixture();
   try {
     await installClaudePlusPlus(fixture.options, fixture.deps);
@@ -597,8 +598,8 @@ test("explicit all-old cleanup is confined to non-current managed mirror directo
     );
 
     assert.equal(result.status, "current");
-    assert.equal(existsSync(oldMirrorA), false);
-    assert.equal(existsSync(oldMirrorB), false);
+    assert.equal(readFileSync(join(oldMirrorA, "sentinel.txt"), "utf8"), "remove-a");
+    assert.equal(readFileSync(join(oldMirrorB, "sentinel.txt"), "utf8"), "remove-b");
     assert.equal(existsSync(currentMirror), true);
     assert.equal(readFileSync(storeFile, "utf8"), "keep-store-file");
     assert.equal(readFileSync(join(outside, "sentinel.txt"), "utf8"), "keep-outside");
@@ -608,7 +609,7 @@ test("explicit all-old cleanup is confined to non-current managed mirror directo
   }
 });
 
-test("explicit all-old cleanup also runs during a fresh install", async () => {
+test("explicit all-old cleanup preserves unrecognized directories during a fresh install", async () => {
   const fixture = await createFixture();
   try {
     const oldMirror = join(fixture.paths.storeApps, "Claude_old");
@@ -621,7 +622,7 @@ test("explicit all-old cleanup also runs during a fresh install", async () => {
     );
 
     assert.equal(result.status, "installed");
-    assert.equal(existsSync(oldMirror), false);
+    assert.equal(readFileSync(join(oldMirror, "sentinel.txt"), "utf8"), "remove");
     assert.equal(existsSync(join(fixture.paths.storeApps, fixture.install.packageFullName)), true);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
@@ -653,6 +654,105 @@ test("explicit all-old cleanup waits for a successful install", async () => {
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+const cleanupCurrentPackage = "Claude_1.0.0.0_x64__pzs8sxrjxfjjc";
+const cleanupOldPackage = "Claude_0.9.0.0_x64__pzs8sxrjxfjjc";
+
+for (const mode of ["installed", "current", "watcher", "repair", "explicit"] as const) {
+  test(`successful ${mode} install automatically cleans unused older mirrors`,
+    { skip: process.platform !== "win32" }, async () => {
+      const fixture = await createFixture();
+      fixture.install.packageFullName = cleanupCurrentPackage;
+      const restore = isolateCleanupInventory(fixture);
+      try {
+        if (mode !== "installed") await installClaudePlusPlus(fixture.options, fixture.deps);
+        const old = createCleanupMirror(fixture, cleanupOldPackage);
+        const newer = createCleanupMirror(fixture, "Claude_2.0.0.0_x64__pzs8sxrjxfjjc");
+        const unknown = createCleanupMirror(fixture, "unrecognized-backup");
+        const result = mode === "repair"
+          ? await repairClaudePlusPlus(fixture.options, fixture.deps)
+          : await installClaudePlusPlus({
+            ...fixture.options, watcher: mode === "watcher", cleanupAllOld: mode === "explicit",
+          }, fixture.deps);
+        assert.equal(result.status, mode === "current" || mode === "watcher" || mode === "explicit" ? "current" : "installed");
+        assert.equal(existsSync(old), false);
+        assert.equal(readFileSync(join(newer, "sentinel.txt"), "utf8"), "keep until recognized as older");
+        assert.ok(existsSync(unknown));
+        assert.ok(existsSync(result.state.managedAppRoot));
+        assert.equal(readClaudePlusPlusState(fixture.paths.stateFile)?.managedAppRoot, result.state.managedAppRoot);
+        assert.ok(existsSync(fixture.paths.shortcutFile));
+        assert.ok(existsSync(fixture.paths.configFile));
+      } finally {
+        restore();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+}
+
+for (const mode of ["installed", "current", "watcher"] as const) {
+  test(`cleanup process failure preserves a successful ${mode} install`,
+    { skip: process.platform !== "win32" }, async () => {
+      const fixture = await createFixture();
+      fixture.install.packageFullName = cleanupCurrentPackage;
+      const restore = isolateCleanupInventory(fixture, "throw 'fixture process query failure'");
+      const warnings: unknown[][] = [];
+      const warning = mock.method(console, "warn", (...args: unknown[]) => { warnings.push(args); });
+      try {
+        if (mode !== "installed") await installClaudePlusPlus(fixture.options, fixture.deps);
+        const old = createCleanupMirror(fixture, cleanupOldPackage);
+        const result = await installClaudePlusPlus({
+          ...fixture.options, watcher: mode === "watcher", cleanupAllOld: true,
+        }, fixture.deps);
+        assert.equal(result.status, mode === "installed" ? "installed" : "current");
+        assert.ok(existsSync(old));
+        assert.ok(existsSync(result.state.managedAppRoot));
+        assert.ok(inspectClaudePlusPlusLoader(result.state.asarPath));
+        assert.ok(warnings.length > 0);
+      } finally {
+        warning.mock.restore();
+        restore();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+}
+
+function createCleanupMirror(fixture: Awaited<ReturnType<typeof createFixture>>, name: string): string {
+  const target = join(fixture.paths.storeApps, name);
+  mkdirSync(join(target, "app"), { recursive: true });
+  writeFileSync(join(target, "sentinel.txt"), "keep until recognized as older");
+  return target;
+}
+
+function isolateCleanupInventory(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  inventory = "@()",
+): () => void {
+  const nativeExec = childProcess.execFileSync;
+  const processQuery = mock.method(childProcess, "execFileSync", ((...args: unknown[]) => {
+    const command = args[1];
+    if (args[0] === "powershell.exe" && Array.isArray(command)) {
+      const position = command.indexOf("-EncodedCommand") + 1;
+      if (position > 0 && typeof command[position] === "string") {
+        const script = Buffer.from(command[position], "base64").toString("utf16le");
+        if (script.includes("function Invoke-MirrorCleanup {")) {
+          const state = readClaudePlusPlusState(fixture.paths.stateFile);
+          assert.ok(state?.managedAppRoot);
+          assert.ok(existsSync(fixture.paths.shortcutFile), "shortcut is refreshed before cleanup");
+          assert.ok(existsSync(fixture.paths.configFile), "config is persisted before cleanup");
+          const isolated = [...command];
+          isolated[position] = Buffer.from(`function Get-CimInstance { ${inventory} }\n${script}`, "utf16le").toString("base64");
+          args[1] = isolated;
+        }
+      }
+    }
+    return Reflect.apply(nativeExec, childProcess, args);
+  }) as typeof childProcess.execFileSync);
+  syncBuiltinESMExports();
+  return () => {
+    processQuery.mock.restore();
+    syncBuiltinESMExports();
+  };
+}
 
 test("refreshes Runtime during a same-version maintenance install", async () => {
   const fixture = await createFixture();
@@ -696,7 +796,7 @@ test("repair restores a missing Runtime and a missing Loader", async () => {
     await repairClaudePlusPlus(fixture.options, fixture.deps);
 
     assert.equal(existsSync(join(fixture.paths.runtime, "main.js")), true);
-    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.3.10");
+    assert.equal(inspectClaudePlusPlusLoader(state.asarPath)?.metadata.loaderVersion, "0.3.11");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -726,7 +826,7 @@ test("maintenance preserves an explicitly enabled Watcher across a new Claude pa
     const state = readClaudePlusPlusState(fixture.paths.stateFile);
     assert.ok(state);
     writeFileSync(fixture.paths.stateFile, JSON.stringify({ ...state, watcher: "scheduled-task" }));
-    fixture.install.packageFullName = "Claude_fixture_v2_x64__test";
+    fixture.install.packageFullName = "Claude_2.0.0.0_x64__pzs8sxrjxfjjc";
     fixture.install.packageVersion = "2.0.0.0";
 
     await installClaudePlusPlus(fixture.options, fixture.deps);
@@ -1450,7 +1550,7 @@ async function createFixture() {
   const asarPath = join(resourcesPath, "app.asar");
   await asar.createPackage(asarSource, asarPath);
   const install: ClaudeInstall = {
-    packageFullName: "Claude_fixture_x64__test",
+    packageFullName: cleanupCurrentPackage,
     packageVersion: "1.0.0.0",
     installLocation: join(root, "official"),
     appRoot,

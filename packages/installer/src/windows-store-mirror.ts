@@ -2,7 +2,6 @@ import {
   access,
   cp,
   mkdir,
-  readdir,
   readFile,
   rename,
   rm,
@@ -41,35 +40,12 @@ export interface ManagedMirrorMarker {
 
 const markerName = ".claude-plusplus-source.json";
 
-export async function cleanupOldWindowsStoreMirrors(
-  paths: ClaudePlusPlusPaths,
-  currentPackageFullName: string,
-): Promise<void> {
-  const currentName = currentPackageFullName.toLowerCase();
-  const entries = await readdir(paths.storeApps, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.toLowerCase() === currentName) continue;
-    const candidate = join(paths.storeApps, entry.name);
-    assertImmediateManagedMirrorPath(candidate, paths);
-    await rm(candidate, { recursive: true, force: true });
-  }
-}
-
 export function assertManagedMirrorPath(candidate: string, paths: ClaudePlusPlusPaths): void {
   const root = resolve(paths.storeApps);
   const target = resolve(candidate);
   const child = relative(root, target);
   if (!child || child.startsWith("..") || isAbsolute(child)) {
     throw new Error(`Path is outside the Claude++ store-apps root: ${candidate}`);
-  }
-}
-
-function assertImmediateManagedMirrorPath(candidate: string, paths: ClaudePlusPlusPaths): void {
-  assertManagedMirrorPath(candidate, paths);
-  const root = resolve(paths.storeApps);
-  const target = resolve(candidate);
-  if (dirname(target).toLowerCase() !== root.toLowerCase()) {
-    throw new Error(`Path is not an immediate Claude++ managed mirror: ${candidate}`);
   }
 }
 

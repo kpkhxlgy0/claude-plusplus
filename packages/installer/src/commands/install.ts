@@ -29,16 +29,16 @@ import {
   type ClaudePlusPlusStateV2,
 } from "../state.js";
 import {
-  cleanupOldWindowsStoreMirrors,
   prepareWindowsStoreMirror,
   type ManagedMirrorResult,
   type MirrorFileSystem,
 } from "../windows-store-mirror.js";
+import { cleanupOldWindowsMirrors } from "../windows-mirror-cleanup.js";
 import { installWindowsManagedLauncher, windowsManagedLaunchCommand } from "../windows-launcher.js";
 import { installCliLauncher } from "../cli-launcher.js";
 import { writeWatcherScript } from "../watcher.js";
 
-const version = "0.3.10";
+const version = "0.3.11";
 const defaultUpdateRepo = "kpkhxlgy0/claude-plusplus";
 const execFileAsync = promisify(execFile);
 
@@ -129,11 +129,10 @@ export async function installClaudePlusPlus(
       installWindowsManagedLauncher(paths);
       const launch = windowsManagedLaunchCommand(paths);
       await createShortcut(launch.command, paths.shortcutFile, launch.args, currentState.managedExecutable);
-      if (options.watcher) return { status: "current", state: currentState };
-      if (options.cleanupAllOld) {
-        await cleanupOldWindowsStoreMirrors(paths, official.packageFullName);
-      }
-      writeJsonAtomic(paths.configFile, migratedConfig);
+      if (!options.watcher) writeJsonAtomic(paths.configFile, migratedConfig);
+      cleanupOldWindowsMirrors({
+        appRoot: currentState.managedAppRoot, stateFile: paths.stateFile, localAppData: dirname(paths.localRoot),
+      });
       return { status: "current", state: currentState };
     }
 
@@ -173,10 +172,10 @@ export async function installClaudePlusPlus(
     installWindowsManagedLauncher(paths);
     const launch = windowsManagedLaunchCommand(paths);
     await createShortcut(launch.command, paths.shortcutFile, launch.args, state.managedExecutable);
-    if (options.cleanupAllOld) {
-      await cleanupOldWindowsStoreMirrors(paths, official.packageFullName);
-    }
     writeJsonAtomic(paths.configFile, migratedConfig);
+    cleanupOldWindowsMirrors({
+      appRoot: state.managedAppRoot, stateFile: paths.stateFile, localAppData: dirname(paths.localRoot),
+    });
     return { status: "installed", state };
   } catch (error) {
     await prepared.rollback();
