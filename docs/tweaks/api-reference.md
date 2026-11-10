@@ -58,7 +58,7 @@ interface TweakApi {
   fs: TweakFs;
   claude?: ClaudeApi;
   mcp?: TweakMcpApi;
-  sessionStats?: SessionStatsApi;
+  sessionStats?: SessionStatsApi; // Deprecated type compatibility only; never supplied by Runtime.
   startupEnvironment?: StartupEnvironmentApi;
   claudeCodeSettings?: ClaudeCodeSettingsApi;
 }
@@ -73,50 +73,23 @@ interface TweakApi {
 | `claudeCodeSettings` | no | yes | `claude-code-settings` plus declaration |
 | `mcp` | no | yes | `mcp` |
 | `claude.sessionTitles` | no | yes | `claude-session-title-write` |
-| `sessionStats` | no | yes | `session-stats` (Runtime 0.3.9+) |
+| `sessionStats` | no | no | Deprecated type compatibility only; no Runtime service. |
 
 The `network` permission is review metadata in the current Runtime: there is no dedicated SDK network API or Runtime
 network guard.
 
-## Session statistics provider
+## Legacy session statistics compatibility
 
-```ts
-interface SessionStatsContext {
-  readonly bridgeSessionId: string;
-  readonly organizationId: string;
-  readonly agentId?: string;
-  readonly signal: AbortSignal;
-}
-type SessionStatsProvider = (context: Readonly<SessionStatsContext>) =>
-  Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
-interface SessionStatsApi {
-  registerProvider(handler: SessionStatsProvider): { unregister(): void };
-}
-```
+`session-stats` is a deprecated permission recognized only so existing Main-capable Tweak manifests can still load.
+The optional `TweakApi.sessionStats` property and the exported `SessionStatsContext`, `SessionStatsProvider`,
+`SessionStatsRegistration`, and `SessionStatsApi` types remain for source compatibility. Runtime never supplies this
+property in either process and has no statistics provider registry, native statistics compile adapter, or statistics
+control-request handler.
+Existing Tweaks must guard optional access to preserve their local statistics behavior.
 
-One Main provider may register at a time. Registration is synchronous; its handle and its API lease own the handler.
-Unregistering, stopping, disabling or reloading the Tweak, and app quit revoke it and abort in-flight work. A retained
-API reference cannot register after disposal. Providers must honor `signal` when doing asynchronous work.
-
-The authenticated native Remote Control bridge supplies the session ID. The request declares only
-`{ subtype: "claudepp_session_stats", protocolVersion: 1, organizationId, agentId? }`; it cannot select another bridge
-session or a filesystem path. The provider receives the normalized `session_` ID, lowercase organization UUID, optional
-validated child-agent ID and abort signal. This is a Desktop capability; independent terminal Claude CLI processes do
-not load the Claude++ Runtime.
-
-Return the existing `claude-session-stats` numeric snapshot envelope: schema 1 for the main session or schema 2 with
-`agentId` for a child. Runtime checks exact keys, bridge/organization/agent equality, safe non-negative integer counters,
-finite rates, cache ratio 0..1, a 16 KiB UTF-8 limit, age at most 30 seconds and future skew at most 5 seconds. The success
-control response contains `{ protocolVersion: 1, snapshot }`. Return `null` for unavailable data; it produces the generic
-`session-stats-unavailable` error. Invalid snapshots produce `session-stats-invalid`; no registered provider produces
-`session-stats-unsupported`. Provider exceptions never expose their text, filesystem paths or credentials.
-
-Requests time out after 5 seconds; Runtime allows at most 32 in flight overall and 8 per native bridge connection.
-Cancellation, lease revocation and replaced/closed native transports suppress late replies. This adapter is independent
-of the MCP adapter and currently supports only Desktop `4.23118.0`. Both its SDK bridge and CCR transport require
-their own exact native chunk hash and callsite matches.
-Version/hash/callsite drift leaves native behavior unchanged. Its early compile hook requires a complete app restart
-after installing Runtime 0.3.9; reloading a Tweak alone cannot attach it to an already evaluated native module.
+Remote Control statistics publication and reception belong to the statistics Tweak through the session's authenticated
+`client_metadata` channel. They do not use a Claude++ core RPC service or require CLI modification. Historical release
+notes describe the removed transport and do not establish current support.
 
 ## Always-present common APIs
 

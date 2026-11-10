@@ -10,6 +10,7 @@ export const VALID_TWEAK_PERMISSIONS = [
   "claude-code-settings",
   "mcp",
   "claude-session-title-write",
+  // Legacy manifest compatibility only; no Runtime service is provided.
   "session-stats",
 ] as const;
 
@@ -205,6 +206,7 @@ export interface ClaudeApi {
   sessionTitles?: ClaudeSessionTitlesApi;
 }
 
+/** @deprecated Legacy type compatibility only; Runtime no longer provides sessionStats. */
 export interface SessionStatsContext {
   readonly bridgeSessionId: string;
   readonly organizationId: string;
@@ -212,14 +214,17 @@ export interface SessionStatsContext {
   readonly signal: AbortSignal;
 }
 
+/** @deprecated Legacy type compatibility only; Runtime no longer provides sessionStats. */
 export type SessionStatsProvider = (
   context: Readonly<SessionStatsContext>,
 ) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
 
+/** @deprecated Legacy type compatibility only; Runtime no longer provides sessionStats. */
 export interface SessionStatsRegistration {
   unregister(): void;
 }
 
+/** @deprecated Legacy type compatibility only; Runtime no longer provides sessionStats. */
 export interface SessionStatsApi {
   registerProvider(handler: SessionStatsProvider): SessionStatsRegistration;
 }
@@ -234,6 +239,7 @@ export interface TweakApi {
   fs: TweakFs;
   claude?: ClaudeApi;
   mcp?: TweakMcpApi;
+  /** @deprecated Retained for source compatibility; absent from all Runtime API leases. */
   sessionStats?: SessionStatsApi;
   startupEnvironment?: StartupEnvironmentApi;
   claudeCodeSettings?: ClaudeCodeSettingsApi;

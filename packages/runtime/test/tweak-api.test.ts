@@ -19,29 +19,39 @@ import { initializeClaudeCodeSettings } from "../src/claude-code-settings.ts";
 import type { ClaudeSessionTitlesApiLease } from "../src/claude-desktop-mcp-service.ts";
 import type { TweakMcpApiLease } from "../src/tweak-mcp-registry.ts";
 import { TweakLifecycle } from "../src/tweak-lifecycle.ts";
-import { SessionStatsService } from "../src/session-stats-service.ts";
 
-test("Main session-stats lease is permission gated, absent in Renderer and revoked on stop", async () => {
+test("legacy session-stats declarations expose no Main or Renderer runtime capability", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-stats-api-"));
-  const service = new SessionStatsService({ desktopVersion: "unsupported" });
   try {
     for (const permissions of [[], ["session-stats"]] as const) {
-      const lease = createMainTweakApiLease({ manifest: manifest([...permissions]), userRoot: root, log,
-        ipc: mainIpcBridge(), startupEnvironment: initializeStartupEnvironment({ userRoot: root, env: {}, log }),
-        claudeCodeSettings: codeSettings(root), desktopMcpService: new FakeDesktopMcpService(),
-        sessionStatsService: service });
-      assert.equal(lease.api.sessionStats !== undefined, permissions.length > 0);
-      const register = lease.api.sessionStats?.registerProvider;
-      register?.(() => null);
+      const options = {
+        manifest: manifest([...permissions]),
+        userRoot: root,
+        log,
+        ipc: mainIpcBridge(),
+        startupEnvironment: initializeStartupEnvironment({ userRoot: root, env: {}, log }),
+        claudeCodeSettings: codeSettings(root),
+        desktopMcpService: new FakeDesktopMcpService(),
+        sessionStatsService: {
+          createApiLease() { throw new Error("obsolete provider must not be invoked"); },
+        },
+      };
+      const lease = createMainTweakApiLease(options);
+      assert.equal(lease.api.sessionStats, undefined);
       lease.disposeForQuit?.();
-      if (register) assert.throws(() => register(() => null), /disposed/);
       await lease.dispose();
     }
-    const renderer = createRendererTweakApiLease({ manifest: manifest(["session-stats"]), log,
-      storage: localStorageBridge(new Map()), ipc: rendererIpcBridge(async () => undefined) });
+    const renderer = createRendererTweakApiLease({
+      manifest: manifest(["session-stats"]),
+      log,
+      storage: localStorageBridge(new Map()),
+      ipc: rendererIpcBridge(async () => undefined),
+    });
     assert.equal(renderer.api.sessionStats, undefined);
     await renderer.dispose();
-  } finally { service.dispose(); rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Main API exposes Desktop capabilities only for their exact permissions", async () => {

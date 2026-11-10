@@ -5,6 +5,20 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.3.10
+
+Release notes: [docs/releases/0.3.10.md](docs/releases/0.3.10.md)
+
+### Changed
+
+- Remove the legacy core session-statistics RPC service, native compile hooks, and Desktop transport adapters.
+  Claude Desktop's local Code CLI owns the Remote Control connection; Session Stats 0.9.0 instead publishes and
+  receives snapshots through authenticated session `client_metadata`, without modifying the CLI.
+- Retain the deprecated `session-stats` manifest permission and SDK types for compatibility. Existing manifests can
+  still load, but Runtime no longer supplies `api.sessionStats`.
+- Use Session Stats 0.9.0 on both the running and receiving devices for the metadata transport. The Tweak does not
+  require this core cleanup release.
+
 ## 0.3.9
 
 Release notes: [docs/releases/0.3.9.md](docs/releases/0.3.9.md)

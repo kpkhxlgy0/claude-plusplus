@@ -7,6 +7,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import Module from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,8 +17,13 @@ import { initializeStartupEnvironment } from "../src/startup-environment.ts";
 import { initializeClaudeCodeSettings } from "../src/claude-code-settings.ts";
 import type { TweakUpdateChecker } from "../src/tweak-update.ts";
 
-test("Runtime initializer installs the Desktop observer synchronously before yielding to Claude", () => {
+test("Runtime initializer installs only the Desktop observer before yielding to Claude", () => {
   const root = mkdtempSync(join(tmpdir(), "claudepp-runtime-early-mcp-"));
+  const modulePrototype = Module.prototype as unknown as { _compile: unknown };
+  const nativeCompile = modulePrototype._compile;
+  const callbackSymbol = Symbol.for("claudepp:session-stats:answer");
+  const callbacks = globalThis as unknown as Record<symbol, unknown>;
+  const originalCallback = callbacks[callbackSymbol];
   try {
     const calls: string[] = [];
     const desktopMcpService = new FakeDesktopMcpService(calls);
@@ -28,34 +34,37 @@ test("Runtime initializer installs the Desktop observer synchronously before yie
     };
     let bootstrapService: FakeDesktopMcpService | undefined;
     let bootstrapChecker: TweakUpdateChecker | undefined;
-    const sessionStatsService = {
-      installEarly() { calls.push("install-stats-early"); },
-      createApiLease() { throw new Error("unused in initializer test"); },
-      dispose() {},
-    };
+    let bootstrapHasStatsService = false;
+    const electron = fakeElectron(fakeSession());
+    electron.app.getVersion = () => "4.23118.0";
 
     initializeRuntimeModule({
-      electron: fakeElectron(fakeSession()),
+      electron,
       userRoot: root,
       runtimeRoot: "C:\\runtime",
       startupEnvironment: startupEnvironment(root),
       claudeCodeSettings: codeSettings(root),
       tweakUpdateChecker,
       createDesktopMcpService: () => desktopMcpService,
-      createSessionStatsService: () => sessionStatsService,
       bootstrap: async (deps) => {
         calls.push("bootstrap");
         bootstrapService = deps.desktopMcpService as FakeDesktopMcpService;
         bootstrapChecker = deps.tweakUpdateChecker;
-        assert.equal(deps.sessionStatsService, sessionStatsService);
+        bootstrapHasStatsService = Object.hasOwn(deps, "sessionStatsService");
       },
     });
     calls.push("original-entry");
 
-    assert.deepEqual(calls, ["install-early", "install-stats-early", "bootstrap", "original-entry"]);
+    assert.deepEqual(calls, ["install-early", "bootstrap", "original-entry"]);
+    assert.equal(modulePrototype._compile, nativeCompile);
+    assert.equal(callbacks[callbackSymbol], originalCallback);
+    assert.equal(bootstrapHasStatsService, false);
     assert.equal(bootstrapService, desktopMcpService);
     assert.equal(bootstrapChecker, tweakUpdateChecker);
   } finally {
+    modulePrototype._compile = nativeCompile;
+    if (originalCallback === undefined) delete callbacks[callbackSymbol];
+    else callbacks[callbackSymbol] = originalCallback;
     rmSync(root, { recursive: true, force: true });
   }
 });

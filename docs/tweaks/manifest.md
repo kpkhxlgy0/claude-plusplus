@@ -57,8 +57,9 @@ the CLI's canonical containment and regular-file checks described in [Getting st
 | `main` | yes | no | Use for trusted Node.js work or a headless service. |
 | `both` | yes | yes | Branch on `api.process`; each process gets an independent lifecycle and API lease. |
 
-The `mcp`, `claude-session-title-write`, and `session-stats` permissions require `main` or `both`. Startup environment
-and Claude Code settings declarations also require a Main-capable scope. Runtime exposes these only to Main API leases.
+The `mcp` and `claude-session-title-write` permissions require `main` or `both`. Startup environment and Claude Code
+settings declarations also require a Main-capable scope. Runtime exposes these only to Main API leases. The deprecated
+`session-stats` permission retains its Main-capable scope restriction for legacy manifest compatibility but exposes no API.
 
 Startup environment ownership is exact:
 
@@ -91,7 +92,7 @@ Claude++ recognizes exactly ten permission strings:
 | `claude-code-settings` | Exposes Main `api.claudeCodeSettings` and requires `claudeCodeSettings`. |
 | `mcp` | Exposes Main `api.mcp` for handler-backed, in-process Claude Desktop MCP servers. |
 | `claude-session-title-write` | Exposes Main `api.claude.sessionTitles`. |
-| `session-stats` | Exposes Main `api.sessionStats` for one revocable, authenticated session statistics provider. |
+| `session-stats` | Deprecated legacy manifest compatibility only. Runtime supplies no `api.sessionStats` service. |
 
 Permissions constrain Claude++ API leases. They do not sandbox Main Tweak Node.js code from the operating system.
 Declare only capabilities the Tweak actually uses.

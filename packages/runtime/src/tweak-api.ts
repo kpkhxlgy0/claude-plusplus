@@ -19,7 +19,6 @@ import type { TweakApiLease } from "./tweak-lifecycle.js";
 import type { StartupEnvironmentService } from "./startup-environment.js";
 import type { ClaudeCodeSettingsService } from "./claude-code-settings.js";
 import type { ClaudeDesktopMcpService } from "./claude-desktop-mcp-service.js";
-import type { SessionStatsService } from "./session-stats-service.js";
 
 export interface MainTweakApiOptions {
   manifest: TweakManifest;
@@ -28,7 +27,6 @@ export interface MainTweakApiOptions {
   ipc: MainTweakIpcBridge;
   startupEnvironment: StartupEnvironmentService;
   claudeCodeSettings: ClaudeCodeSettingsService;
-  sessionStatsService?: Pick<SessionStatsService, "createApiLease">;
   desktopMcpService: Pick<
     ClaudeDesktopMcpService,
     "createMcpApiLease" | "createSessionTitlesApiLease"
@@ -69,9 +67,6 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
     ? options.desktopMcpService.createSessionTitlesApiLease()
     : undefined;
   const claude = sessionTitles ? { sessionTitles: sessionTitles.api } : undefined;
-  const sessionStats = options.manifest.permissions?.includes("session-stats")
-    ? options.sessionStatsService?.createApiLease()
-    : undefined;
   const createResourceDisposer = (dispose: () => void | Promise<void>): (() => Promise<void>) => {
     let promise: Promise<void> | undefined;
     return (): Promise<void> => {
@@ -86,7 +81,6 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
     };
   };
   const resources = [
-    ...(sessionStats ? [["session stats lease", createResourceDisposer(() => sessionStats.dispose())] as const] : []),
     ["Desktop MCP lease", createResourceDisposer(() => mcp?.dispose())],
     ["session title lease", createResourceDisposer(() => sessionTitles?.dispose())],
     ["Claude Code settings lease", createResourceDisposer(() => claudeCodeSettings?.dispose())],
@@ -120,7 +114,6 @@ export function createMainTweakApiLease(options: MainTweakApiOptions): TweakApiL
       ...(startupEnvironment ? { startupEnvironment: startupEnvironment.api } : {}),
       ...(claudeCodeSettings ? { claudeCodeSettings: claudeCodeSettings.api } : {}),
       ...(mcp ? { mcp: mcp.api } : {}),
-      ...(sessionStats ? { sessionStats: sessionStats.api } : {}),
       ...(claude ? { claude } : {}),
     },
     dispose(): Promise<void> {

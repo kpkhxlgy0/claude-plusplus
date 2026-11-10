@@ -27,7 +27,7 @@ import {
   type TweakStorage,
 } from "../src/index.ts";
 
-test("accepts Main session-stats providers and rejects Renderer-only declarations", () => {
+test("keeps legacy Main session-stats manifests loadable and rejects Renderer-only declarations", () => {
   for (const scope of ["main", "both", "renderer"]) {
     const result = validateTweakManifest({ id: "com.example.stats", name: "Stats", version: "0.1.0",
       githubRepo: "example/stats", scope, permissions: ["session-stats"] });

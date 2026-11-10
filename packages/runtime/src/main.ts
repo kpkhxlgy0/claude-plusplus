@@ -26,9 +26,6 @@ import {
 } from "./claude-desktop-mcp-service.js";
 import type { TweakMcpApiLease } from "./tweak-mcp-registry.js";
 import type { TweakUpdateChecker } from "./tweak-update.js";
-import { SessionStatsService } from "./session-stats-service.js";
-
-export type RuntimeSessionStatsService = Pick<SessionStatsService, "installEarly" | "createApiLease" | "dispose">;
 
 export type RuntimeDesktopMcpService = Pick<
   ClaudeDesktopMcpService,
@@ -43,7 +40,6 @@ export interface RuntimeBootstrapDeps {
   startupEnvironment: StartupEnvironmentService;
   claudeCodeSettings: ClaudeCodeSettingsService;
   desktopMcpService: RuntimeDesktopMcpService;
-  sessionStatsService?: RuntimeSessionStatsService;
   tweakUpdateChecker?: TweakUpdateChecker;
 }
 
@@ -56,7 +52,6 @@ export interface RuntimeModuleInitializerDeps {
   log?: TweakLogger;
   tweakUpdateChecker?: TweakUpdateChecker;
   createDesktopMcpService?: () => RuntimeDesktopMcpService;
-  createSessionStatsService?: () => RuntimeSessionStatsService;
   bootstrap?: (deps: RuntimeBootstrapDeps) => Promise<void>;
 }
 
@@ -79,17 +74,6 @@ export function initializeRuntimeModule(deps: RuntimeModuleInitializerDeps): voi
     desktopMcpService = createUnsupportedDesktopMcpService();
   }
 
-  let sessionStatsService: RuntimeSessionStatsService | undefined;
-  try {
-    sessionStatsService = deps.createSessionStatsService?.() ?? new SessionStatsService({
-      desktopVersion: deps.electron.app.getVersion(),
-    });
-    sessionStatsService.installEarly();
-  } catch {
-    try { sessionStatsService?.dispose(); } catch {}
-    sessionStatsService = undefined;
-    log.warn("[Claude++] Session stats native adapter is unavailable");
-  }
   const bootstrap = deps.bootstrap ?? bootstrapRuntime;
   void bootstrap({
     electron: deps.electron,
@@ -98,7 +82,6 @@ export function initializeRuntimeModule(deps: RuntimeModuleInitializerDeps): voi
     startupEnvironment: deps.startupEnvironment,
     claudeCodeSettings: deps.claudeCodeSettings,
     desktopMcpService,
-    sessionStatsService,
     tweakUpdateChecker: deps.tweakUpdateChecker,
   }).catch((error) => {
     log.error(`[bootstrap] ${errorMessage(error)}`);
@@ -134,7 +117,6 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
       startupEnvironment: deps.startupEnvironment,
       claudeCodeSettings: deps.claudeCodeSettings,
       desktopMcpService: deps.desktopMcpService,
-      sessionStatsService: deps.sessionStatsService,
     }));
   };
   const manager = new TweakManager({
@@ -193,7 +175,6 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
     runQuitCleanupStep("Main Tweak disposal", () => lifecycle.stopAllForQuit());
     runQuitCleanupStep("Tweak watcher disposal", () => stopWatching());
     runQuitCleanupStep("Desktop MCP service disposal", () => deps.desktopMcpService.dispose());
-    runQuitCleanupStep("Session stats service disposal", () => deps.sessionStatsService?.dispose());
     runQuitCleanupStep("Management IPC disposal", () => disposeManagementIpc());
   });
   await deps.electron.app.whenReady();
