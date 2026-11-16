@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-16T19:29:51.184Z",
+  "generatedAt": "2026-11-16T20:02:21.651Z",
   "entries": [
     {
       "id": "com.kpk.claude-api-skill-override",
@@ -221,10 +221,10 @@
       "manifest": {
         "id": "com.kpk.daily-usage",
         "name": "Daily Usage",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "githubRepo": "kpkhxlgy0/claude-daily-usage",
         "homepage": "https://github.com/kpkhxlgy0/claude-daily-usage",
-        "iconUrl": "https://raw.githubusercontent.com/kpkhxlgy0/claude-daily-usage/v0.1.1/icon.svg",
+        "iconUrl": "./icon.svg",
         "description": "按北京时间统计本机和 Remote Control 机器的每日 Token 与 API 等值美元。",
         "author": "kpkhxlgy0",
         "scope": "both",
@@ -243,11 +243,11 @@
         ]
       },
       "repo": "kpkhxlgy0/claude-daily-usage",
-      "approvedCommitSha": "b8c63320282e5264d146a2b014c98ee3bf1f3a74",
-      "approvedAt": "2026-11-16T19:29:51.184Z",
+      "approvedCommitSha": "9126c83102059d32a22fa85d64edbfe341f35b51",
+      "approvedAt": "2026-11-16T20:02:21.651Z",
       "approvedBy": "kpkhxlgy0",
-      "releaseUrl": "https://github.com/kpkhxlgy0/claude-daily-usage/releases/tag/v0.1.1",
-      "reviewUrl": "https://github.com/kpkhxlgy0/claude-daily-usage/commit/b8c63320282e5264d146a2b014c98ee3bf1f3a74"
+      "releaseUrl": "https://github.com/kpkhxlgy0/claude-daily-usage/releases/tag/v0.1.2",
+      "reviewUrl": "https://github.com/kpkhxlgy0/claude-daily-usage/commit/9126c83102059d32a22fa85d64edbfe341f35b51"
     }
   ]
 }
