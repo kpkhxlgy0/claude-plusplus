@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-16T20:02:21.651Z",
+  "generatedAt": "2026-11-17T07:38:55.490Z",
   "entries": [
     {
       "id": "com.kpk.claude-api-skill-override",
@@ -221,7 +221,7 @@
       "manifest": {
         "id": "com.kpk.daily-usage",
         "name": "Daily Usage",
-        "version": "0.1.2",
+        "version": "0.1.3",
         "githubRepo": "kpkhxlgy0/claude-daily-usage",
         "homepage": "https://github.com/kpkhxlgy0/claude-daily-usage",
         "iconUrl": "./icon.svg",
@@ -243,11 +243,11 @@
         ]
       },
       "repo": "kpkhxlgy0/claude-daily-usage",
-      "approvedCommitSha": "9126c83102059d32a22fa85d64edbfe341f35b51",
-      "approvedAt": "2026-11-16T20:02:21.651Z",
+      "approvedCommitSha": "8a0335d72ab5b0dc96ca0f726ae7095926b01619",
+      "approvedAt": "2026-11-17T07:38:55.490Z",
       "approvedBy": "kpkhxlgy0",
-      "releaseUrl": "https://github.com/kpkhxlgy0/claude-daily-usage/releases/tag/v0.1.2",
-      "reviewUrl": "https://github.com/kpkhxlgy0/claude-daily-usage/commit/9126c83102059d32a22fa85d64edbfe341f35b51"
+      "releaseUrl": "https://github.com/kpkhxlgy0/claude-daily-usage/releases/tag/v0.1.3",
+      "reviewUrl": "https://github.com/kpkhxlgy0/claude-daily-usage/commit/8a0335d72ab5b0dc96ca0f726ae7095926b01619"
     }
   ]
 }
