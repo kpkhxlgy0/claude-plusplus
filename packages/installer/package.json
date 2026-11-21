@@ -1,6 +1,6 @@
 {
   "name": "@claude-plusplus/installer",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Windows installer and recovery CLI for Claude++",
   "type": "module",
   "main": "dist/cli.js",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@claude-plusplus/sdk": "*",
-    "@electron/asar": "4.2.1"
+    "@electron/asar": "4.3.2"
   },
   "devDependencies": {
     "tsx": "^4.20.0",

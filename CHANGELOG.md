@@ -5,6 +5,11 @@ All notable changes to Claude++ are documented here.
 Claude++ uses semantic versioning for the Installer, Runtime, SDK, Loader, and Windows release package. Tweak authors
 should also use semantic version tags so the manager can compare installed and available versions.
 
+## 0.3.12
+
+- Update the Windows installer's ASAR packaging dependencies and the Electron development toolchain to resolve
+  the six dependency alerts reported for 0.3.11. [Release notes](docs/releases/0.3.12.md)
+
 ## 0.3.10
 
 Release notes: [docs/releases/0.3.10.md](docs/releases/0.3.10.md)
