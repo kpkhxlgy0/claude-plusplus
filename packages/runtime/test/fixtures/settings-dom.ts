@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 export class MiniElement {
+  public readonly nodeType = 1;
   public readonly tagName: string;
   public readonly children: MiniElement[] = [];
   public readonly dataset: Record<string, string> = {};
@@ -42,7 +43,10 @@ export class MiniElement {
 
   public set textContent(value: string) {
     this.text = value;
+    const removed = [...this.children];
+    for (const child of removed) child.parentElement = null;
     this.children.splice(0);
+    this.ownerDocument?.notifyChildMutation(this, [], removed);
   }
 
   public get childElementCount(): number {
@@ -57,20 +61,25 @@ export class MiniElement {
     child.remove();
     child.parentElement = this;
     this.children.push(child);
+    this.ownerDocument?.notifyChildMutation(this, [child], []);
     return child;
   }
 
   public replaceChildren(...children: MiniElement[]): void {
-    for (const child of this.children) child.parentElement = null;
+    const removed = [...this.children];
+    for (const child of removed) child.parentElement = null;
     this.children.splice(0);
+    this.ownerDocument?.notifyChildMutation(this, [], removed);
     this.append(...children);
   }
 
   public remove(): void {
     if (!this.parentElement) return;
-    const index = this.parentElement.children.indexOf(this);
-    if (index >= 0) this.parentElement.children.splice(index, 1);
+    const parent = this.parentElement;
+    const index = parent.children.indexOf(this);
+    if (index >= 0) parent.children.splice(index, 1);
     this.parentElement = null;
+    this.ownerDocument?.notifyChildMutation(parent, [], [this]);
   }
 
   public contains(candidate: MiniElement | null): boolean {
@@ -134,6 +143,10 @@ export class MiniElement {
     }
     return null;
   }
+
+  public matches(selector: string): boolean {
+    return matchesSelector(this, selector);
+  }
 }
 
 interface MiniEvent {
@@ -145,6 +158,7 @@ interface MiniEvent {
 class MiniDocument extends MiniElement {
   public readonly documentElement = new MiniElement("html");
   public readonly body = new MiniElement("body");
+  public queryCount = 0;
 
   public constructor() {
     super("document");
@@ -162,29 +176,46 @@ class MiniDocument extends MiniElement {
   }
 
   public notifyAttributeMutation(target: MiniElement, attributeName: string): void {
-    MiniMutationObserver.queueAttributeMutation(target, attributeName);
+    MiniMutationObserver.queue({ type: "attributes", target, attributeName, addedNodes: [], removedNodes: [] });
   }
+
+  public notifyChildMutation(target: MiniElement, addedNodes: MiniElement[], removedNodes: MiniElement[]): void {
+    if (addedNodes.length || removedNodes.length) {
+      MiniMutationObserver.queue({ type: "childList", target, addedNodes, removedNodes });
+    }
+  }
+
+  public override querySelectorAll(selector: string): MiniElement[] {
+    this.queryCount += 1;
+    return super.querySelectorAll(selector);
+  }
+}
+
+interface MiniMutationRecord {
+  type: "attributes" | "childList";
+  target: MiniElement;
+  attributeName?: string;
+  addedNodes: MiniElement[];
+  removedNodes: MiniElement[];
 }
 
 class MiniMutationObserver {
   public static instances: MiniMutationObserver[] = [];
   private static readonly queued = new Set<MiniMutationObserver>();
-  private observing = false;
-  private target: MiniElement | null = null;
-  private options: MutationObserverInit | null = null;
+  private readonly targets = new Map<MiniElement, MutationObserverInit>();
+  private records: MiniMutationRecord[] = [];
 
-  public constructor(private readonly callback: () => void) {
+  public constructor(private readonly callback: (records: MiniMutationRecord[]) => void) {
     MiniMutationObserver.instances.push(this);
   }
 
   public observe(target: MiniElement, options: MutationObserverInit): void {
-    this.observing = true;
-    this.target = target;
-    this.options = options;
+    this.targets.set(target, options);
   }
 
   public disconnect(): void {
-    this.observing = false;
+    this.targets.clear();
+    this.records = [];
     MiniMutationObserver.queued.delete(this);
   }
 
@@ -194,12 +225,11 @@ class MiniMutationObserver {
   }
 
   public static flush(): void {
-    for (const instance of MiniMutationObserver.instances) {
-      if (instance.observing) instance.callback();
-    }
+    assert.equal(this.drainQueued(50).pending, false);
   }
 
   public static discardQueued(): void {
+    for (const instance of this.queued) instance.records = [];
     MiniMutationObserver.queued.clear();
   }
 
@@ -209,47 +239,51 @@ class MiniMutationObserver {
       const queued = [...MiniMutationObserver.queued];
       MiniMutationObserver.queued.clear();
       for (const instance of queued) {
-        if (instance.observing) instance.callback();
+        const records = instance.records;
+        instance.records = [];
+        if (records.length) instance.callback(records);
       }
       turns += 1;
     }
     return { turns, pending: MiniMutationObserver.queued.size > 0 };
   }
 
-  public static queueAttributeMutation(target: MiniElement, attributeName: string): void {
+  public static queue(record: MiniMutationRecord): void {
     for (const instance of MiniMutationObserver.instances) {
-      const options = instance.options;
-      const observedTarget = instance.target;
-      if (!instance.observing || !options?.attributes || !observedTarget) continue;
-      if (options.attributeFilter && !options.attributeFilter.includes(attributeName)) continue;
-      if (target !== observedTarget && (!options.subtree || !observedTarget.contains(target))) continue;
+      const matches = [...instance.targets].some(([target, options]) => {
+        if (record.target !== target && (!options.subtree || !target.contains(record.target))) return false;
+        if (record.type === "childList") return options.childList;
+        return options.attributes && (!options.attributeFilter || options.attributeFilter.includes(record.attributeName!));
+      });
+      if (!matches) continue;
+      instance.records.push(record);
       MiniMutationObserver.queued.add(instance);
     }
   }
 
-  public get observedOptions(): MutationObserverInit | null {
-    return this.options;
-  }
-
   public get isObserving(): boolean {
-    return this.observing;
+    return this.targets.size > 0;
   }
 }
 
 class MiniResizeObserver {
   public static instances: MiniResizeObserver[] = [];
-  private observing = false;
+  private readonly targets = new Set<MiniElement>();
 
   public constructor(private readonly callback: () => void) {
     MiniResizeObserver.instances.push(this);
   }
 
-  public observe(): void {
-    this.observing = true;
+  public observe(target: MiniElement): void {
+    this.targets.add(target);
+  }
+
+  public unobserve(target: MiniElement): void {
+    this.targets.delete(target);
   }
 
   public disconnect(): void {
-    this.observing = false;
+    this.targets.clear();
   }
 
   public static reset(): void {
@@ -258,12 +292,12 @@ class MiniResizeObserver {
 
   public static flush(): void {
     for (const instance of MiniResizeObserver.instances) {
-      if (instance.observing) instance.callback();
+      if (instance.isObserving) instance.callback();
     }
   }
 
   public get isObserving(): boolean {
-    return this.observing;
+    return this.targets.size > 0;
   }
 }
 
@@ -291,6 +325,7 @@ interface SettingsFixtureOptions {
   height?: number;
   selectedButton?: "general" | "claude-code";
   selectedStyle?: "current" | "legacy";
+  mountOnStart?: boolean;
 }
 
 export function settingsFixture(options: SettingsFixtureOptions = {}) {
@@ -298,6 +333,9 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
   MiniResizeObserver.reset();
   windowListeners.clear();
   const document = new MiniDocument();
+  const chat = document.createElement("main");
+  document.body.append(chat);
+  let visibilityReads = 0;
   let dialog: MiniElement;
   let shellHost: MiniElement;
   let nav: MiniElement;
@@ -382,16 +420,25 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     return nextNav;
   };
 
-  const mount = (): void => {
+  const createDialog = (nativePortal = false): MiniElement => {
     dialog = document.createElement("div");
-    dialog.setAttribute("role", "dialog");
-    dialog.setAttribute("data-cds", "settings-dialog");
     shellHost = dialog;
-    if (options.layout === "contents" || options.layout === "contents-with-top-row") {
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("data-cds", nativePortal ? "Dialog" : "settings-dialog");
+    if (nativePortal) dialog.setAttribute("data-perf-overlay", "settings_modal");
+    return dialog;
+  };
+
+  const mountWrapper = (): void => {
+    if (shellHost === dialog && (options.layout === "contents" || options.layout === "contents-with-top-row")) {
       shellHost = document.createElement("div");
       shellHost.className = "contents";
       dialog.appendChild(shellHost);
     }
+  };
+
+  const mountContents = (): void => {
+    mountWrapper();
     createNavigation();
     content = document.createElement("div");
     if (options.layout === "contents" || options.layout === "contents-with-top-row") {
@@ -413,9 +460,14 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
       shellHost.appendChild(nativeTopRow);
     }
     shellHost.appendChild(content);
+  };
+
+  const mount = (): void => {
+    createDialog();
+    mountContents();
     document.body.append(dialog);
   };
-  mount();
+  if (options.mountOnStart !== false) mount();
 
   const click = (target: MiniElement | null): void => {
     assert.ok(target);
@@ -433,10 +485,10 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
       document: document as unknown as Document,
       MutationObserver: MiniMutationObserver as unknown as typeof MutationObserver,
       ResizeObserver: MiniResizeObserver as unknown as typeof ResizeObserver,
-      getComputedStyle: (_element: Element) => ({
-        display: dialogDisplay,
-        visibility: dialogVisibility,
-      }),
+      getComputedStyle: (_element: Element) => {
+        visibilityReads += 1;
+        return { display: dialogDisplay, visibility: dialogVisibility };
+      },
       getBoundingClientRect: (_element: Element) => ({
         width: dialogWidth,
         height: dialogHeight,
@@ -485,10 +537,15 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     setDialogStyle(next: { display: string; visibility: string }): void {
       dialogDisplay = next.display;
       dialogVisibility = next.visibility;
+      dialog.setAttribute("style", `display:${next.display};visibility:${next.visibility}`);
     },
     setDialogRect(width: number, height: number): void {
       dialogWidth = width;
       dialogHeight = height;
+    },
+    setDialogClosed(closed: boolean): void {
+      if (closed) dialog.setAttribute("data-closed", "");
+      else dialog.removeAttribute("data-closed");
     },
     flushAttributeMutation(): void {
       MiniMutationObserver.flush();
@@ -511,8 +568,47 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     drainQueuedMutations(limit: number): { turns: number; pending: boolean } {
       return MiniMutationObserver.drainQueued(limit);
     },
-    mutationObservation(): MutationObserverInit | null {
-      return MiniMutationObserver.instances[0]?.observedOptions ?? null;
+    settingsReadCounts() {
+      return { documentQueries: document.queryCount, visibilityReads };
+    },
+    appendChatUpdate(): void {
+      const turn = document.createElement("article");
+      chat.append(turn);
+      turn.className = "streaming";
+      turn.setAttribute("style", "min-height: 100px");
+      const reply = document.createElement("p");
+      turn.append(reply);
+      reply.textContent = "Claude is typing";
+    },
+    appendNativePortal(): MiniElement {
+      const portal = document.createElement("div");
+      portal.setAttribute("data-base-ui-portal", "");
+      document.body.append(portal);
+      return portal;
+    },
+    appendIncompleteSettingsDialog(portal: MiniElement, marked = true): void {
+      const cdsPortal = document.createElement("div");
+      cdsPortal.setAttribute("data-cds-portal", "");
+      portal.append(cdsPortal);
+      cdsPortal.append(createDialog(marked));
+    },
+    appendChatOverlay(portal: MiniElement, marked = true): MiniElement {
+      const overlay = document.createElement("div");
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("data-cds", "Dialog");
+      if (marked) overlay.setAttribute("data-perf-overlay", "chat_overlay");
+      portal.append(overlay);
+      return overlay;
+    },
+    mountSettingsWrapper: mountWrapper,
+    mountSettingsContents: mountContents,
+    removeNativeSettingsRows(): MiniElement[] {
+      const rows = [...nativeList.children];
+      nativeList.replaceChildren();
+      return rows;
+    },
+    restoreNativeSettingsRows(rows: MiniElement[]): void {
+      nativeList.append(...rows);
     },
     activeMutationObserverCount(): number {
       return MiniMutationObserver.instances.filter((instance) => instance.isObserving).length;
@@ -539,6 +635,12 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
     },
     remountSettingsNavigation(): void {
       nav.remove();
+      shellHost.appendChild(createNavigation());
+    },
+    removeSettingsNavigation(): void {
+      nav.remove();
+    },
+    restoreSettingsNavigation(): void {
       shellHost.appendChild(createNavigation());
     },
     remountSettingsShell(): void {

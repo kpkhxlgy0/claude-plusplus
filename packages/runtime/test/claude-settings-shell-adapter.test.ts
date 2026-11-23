@@ -434,12 +434,6 @@ test("re-evaluates visibility from attribute, element resize, and window resize 
   fixture.flushWindowResize();
 
   assert.deepEqual(states, [true, false, true, false]);
-  assert.deepEqual(fixture.mutationObservation(), {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["class", "style", "hidden", "aria-hidden", "open"],
-  });
   adapter.stop();
 });
 
@@ -466,7 +460,7 @@ test("stop disconnects visual observers and ignores later public signal flushes"
   assert.deepEqual(states, [true]);
 });
 
-test("reports navigation mount state only after attached groups are created or recovered", () => {
+test("defers navigation writes while retained settings are hidden and reports visible mounts", () => {
   const fixture = settingsFixture({ display: "none" });
   const adapter = createClaudeSettingsShellAdapter(fixture.environment);
   const mounts: boolean[] = [];
@@ -478,7 +472,7 @@ test("reports navigation mount state only after attached groups are created or r
   assert.deepEqual(mounts, []);
 
   adapter.setNavigation([group("CLAUDE++", [{ id: "config", title: "Config" }])], () => {});
-  assert.deepEqual(mounts, [false]);
+  assert.deepEqual(mounts, []);
   adapter.setNavigation([{
     ...group("CLAUDE++", [{ id: "config", title: "Config" }]),
     headerAction: {
@@ -488,17 +482,18 @@ test("reports navigation mount state only after attached groups are created or r
       onClick: () => {},
     },
   }], () => {});
-  assert.equal(fixture.countGroupActions("update"), 1);
+  assert.equal(fixture.countGroupActions("update"), 0);
   fixture.flushMutation();
-  assert.deepEqual(mounts, [false]);
+  assert.deepEqual(mounts, []);
 
   fixture.removeInjectedSettingsGroups();
   fixture.flushMutation();
-  assert.deepEqual(mounts, [false, false]);
+  assert.deepEqual(mounts, []);
 
   fixture.replaceVisibleSettingsShell();
   fixture.flushMutation();
-  assert.deepEqual(mounts, [false, false, true]);
+  assert.deepEqual(mounts, [true]);
+  assert.equal(fixture.countGroupActions("update"), 1);
   adapter.stop();
 });
 

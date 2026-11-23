@@ -46,6 +46,7 @@ test("built Renderer preload boots when the sandbox only exposes Electron", asyn
   const document = {
     readyState: "complete",
     documentElement,
+    body: { children: [] },
     addEventListener() {},
     removeEventListener() {},
     querySelectorAll() { return []; },

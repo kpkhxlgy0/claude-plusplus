@@ -38,6 +38,179 @@ afterEach(() => {
   setSettingsManagementBridge(baselineManagementBridge);
 });
 
+test("chat mutations, registration, and resize leave closed settings idle", () => {
+  const fixture = settingsFixture({ mountOnStart: false });
+  startSettingsInjector(fixture.environment);
+  const reads = fixture.settingsReadCounts();
+
+  const registration = registerPage("com.example.one", manifest("com.example.one"), {
+    id: "page",
+    title: "Example Page",
+    render: () => {},
+  });
+  fixture.appendChatUpdate();
+  fixture.flushWindowResize();
+  registration.unregister();
+
+  assert.deepEqual(fixture.drainQueuedMutations(4), { turns: 0, pending: false });
+  assert.deepEqual(fixture.settingsReadCounts(), reads);
+});
+
+test("another native overlay does not activate settings observation", () => {
+  const fixture = settingsFixture({ mountOnStart: false });
+  startSettingsInjector(fixture.environment);
+  const reads = fixture.settingsReadCounts();
+  const portal = fixture.appendNativePortal();
+  const chatOverlay = fixture.appendChatOverlay(portal);
+  fixture.flushMutation();
+
+  chatOverlay.className = "streaming";
+  chatOverlay.setAttribute("style", "width: 75%");
+
+  assert.deepEqual(fixture.drainQueuedMutations(4), { turns: 0, pending: false });
+  assert.deepEqual(fixture.settingsReadCounts(), reads);
+  assert.equal(fixture.activeResizeObserverCount(), 0);
+});
+
+test("an unmarked native dialog does not run settings geometry on class, resize, or deep content changes", () => {
+  const fixture = settingsFixture({ mountOnStart: false });
+  startSettingsInjector(fixture.environment);
+  const reads = fixture.settingsReadCounts();
+  const dialog = fixture.appendChatOverlay(fixture.appendNativePortal(), false);
+  dialog.setAttribute("data-testid", "comments-delete-dialog");
+  const content = dialog.ownerDocument!.createElement("section");
+  dialog.append(content);
+  fixture.flushMutation();
+
+  const detail = dialog.ownerDocument!.createElement("p");
+  content.append(detail);
+  content.className = "changed";
+  detail.setAttribute("style", "color: red");
+  dialog.className = "active";
+  fixture.flushResize();
+  fixture.flushWindowResize();
+
+  assert.deepEqual(fixture.drainQueuedMutations(4), { turns: 0, pending: false });
+  assert.deepEqual(fixture.settingsReadCounts(), reads);
+  assert.equal(fixture.activeResizeObserverCount(), 0);
+});
+
+test("unmarked legacy settings discovers navigation and its native rows across separate commits", () => {
+  const fixture = settingsFixture({ mountOnStart: false, layout: "contents" });
+  startSettingsInjector(fixture.environment);
+  fixture.appendIncompleteSettingsDialog(fixture.appendNativePortal(), false);
+  fixture.mountSettingsWrapper();
+  fixture.flushMutation();
+
+  fixture.mountSettingsContents();
+  const rows = fixture.removeNativeSettingsRows();
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 0);
+
+  fixture.restoreNativeSettingsRows(rows);
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 1);
+
+  fixture.removeSettingsNavigation();
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 0);
+  fixture.restoreSettingsNavigation();
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 1);
+});
+
+test("unmarked settings recognizes native row placeholders when their buttons mount", () => {
+  const fixture = settingsFixture({
+    mountOnStart: false,
+    layout: "contents",
+    nativeNavigation: "test-id",
+    includeClaudeCode: false,
+  });
+  startSettingsInjector(fixture.environment);
+  fixture.appendIncompleteSettingsDialog(fixture.appendNativePortal(), false);
+  fixture.mountSettingsContents();
+  const rowButtons = fixture.nativeList.children.map((row) => {
+    const button = row.querySelector("button");
+    assert.ok(button);
+    button.remove();
+    return { row, button };
+  });
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 0);
+
+  for (const { row, button } of rowButtons) row.append(button);
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 1);
+});
+
+test("native settings mounts after the portal and its navigation render in separate turns", () => {
+  const fixture = settingsFixture({
+    mountOnStart: false,
+    layout: "contents-with-top-row",
+    nativeNavigation: "test-id",
+    includeClaudeCode: false,
+  });
+  startSettingsInjector(fixture.environment);
+  const reads = fixture.settingsReadCounts();
+  const portal = fixture.appendNativePortal();
+  fixture.flushMutation();
+  assert.deepEqual(fixture.settingsReadCounts(), reads);
+
+  fixture.appendIncompleteSettingsDialog(portal);
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 0);
+  fixture.mountSettingsContents();
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 1);
+
+  portal.remove();
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 0);
+  assert.equal(fixture.activeResizeObserverCount(), 0);
+
+  const nextPortal = fixture.appendNativePortal();
+  fixture.appendIncompleteSettingsDialog(nextPortal);
+  fixture.mountSettingsContents();
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 1);
+});
+
+test("a retained native settings dialog tears down its page and idles until reopened", () => {
+  const fixture = settingsFixture({ mountOnStart: false });
+  startSettingsInjector(fixture.environment);
+  let teardowns = 0;
+  registerPage("com.example.one", manifest("com.example.one"), {
+    id: "page",
+    title: "Example Page",
+    render: () => () => { teardowns += 1; },
+  });
+  const portal = fixture.appendNativePortal();
+  fixture.appendIncompleteSettingsDialog(portal);
+  fixture.mountSettingsContents();
+  fixture.flushMutation();
+  fixture.click(fixture.findPageButton("com.example.one:page"));
+  fixture.flushMutation();
+
+  fixture.setDialogClosed(true);
+  fixture.flushMutation();
+  assert.equal(teardowns, 1);
+  assert.equal(Boolean(fixture.findPanel()), false);
+  assert.equal(fixture.windowListenerCount("resize"), 0);
+
+  const reads = fixture.settingsReadCounts();
+  fixture.nativeBody.className = "toggled-while-hidden";
+  fixture.appendChatUpdate();
+  fixture.flushWindowResize();
+  assert.deepEqual(fixture.drainQueuedMutations(4), { turns: 0, pending: false });
+  assert.deepEqual(fixture.settingsReadCounts(), reads);
+
+  fixture.setDialogClosed(false);
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("com.example.one:page"), 1);
+  assert.equal(fixture.nativeHeader.style.display, "grid");
+  assert.equal(fixture.windowListenerCount("resize"), 1);
+});
+
 test("registers a namespaced page, isolates native content, and restores it from native navigation", () => {
   const fixture = settingsFixture();
   const teardown = { count: 0 };
@@ -256,7 +429,7 @@ test("an initially visible navigation mount starts product and Store before inje
   assert.equal(storeBadgeText(fixture.environment.document), "1");
 });
 
-test("a hidden navigation mount defers product metadata and Store warm until first visibility", async () => {
+test("a retained hidden settings dialog waits until visibility to mount navigation and load metadata", async () => {
   const fixture = settingsFixture({ display: "none" });
   const product = deferred<ClaudePlusPlusUpdateCheck>();
   const store = deferred<TweakStoreRegistryView>();
@@ -268,7 +441,7 @@ test("a hidden navigation mount defers product metadata and Store warm until fir
     throw new Error(`unexpected ${channel}`);
   });
   startSettingsInjector(fixture.environment);
-  assert.ok(fixture.findPageButton("claudepp:config"));
+  assert.equal(fixture.countPageButtons("claudepp:config"), 0);
   assert.deepEqual(calls, []);
 
   fixture.setDialogStyle({ display: "block", visibility: "visible" });
@@ -366,7 +539,7 @@ test("same-shell observer and visibility noise does not repeat a mounted product
   assert.ok(fixture.findPageButton("claudepp:config"));
 });
 
-test("a recreated owned group checks only when that mount becomes visible", async () => {
+test("a retained dialog recovers missing groups on reopen and checks the new mount", async () => {
   const fixture = settingsFixture();
   const calls: string[] = [];
   setSettingsManagementBridge(async (channel) => {
@@ -386,7 +559,7 @@ test("a recreated owned group checks only when that mount becomes visible", asyn
     "claudepp:check-claudepp-update",
     "claudepp:get-tweak-store",
   ]);
-  assert.ok(fixture.findPageButton("claudepp:config"));
+  assert.equal(fixture.countPageButtons("claudepp:config"), 0);
 
   fixture.setDialogStyle({ display: "block", visibility: "visible" });
   fixture.flushAttributeMutation();
@@ -395,6 +568,7 @@ test("a recreated owned group checks only when that mount becomes visible", asyn
     "claudepp:get-tweak-store",
     "claudepp:check-claudepp-update",
   ]);
+  assert.equal(fixture.countPageButtons("claudepp:config"), 1);
 });
 
 test("an automatic product IPC rejection clears the action without removing navigation", async () => {
@@ -552,6 +726,8 @@ test("automatic and forced product checks publish strictly in completion order",
   const hidden = settingsFixture({ display: "none" });
   setSettingsManagementBridge(productBridge(automaticSecond, forcedFirst));
   startSettingsInjector(hidden.environment);
+  hidden.setDialogStyle({ display: "block", visibility: "visible" });
+  hidden.flushAttributeMutation();
   hidden.click(hidden.findPageButton("claudepp:config"));
   await flushPromises();
   const hiddenPanel = hidden.findPanel();
@@ -560,9 +736,6 @@ test("automatic and forced product checks publish strictly in completion order",
     findSectionByHeading(hiddenPanel as unknown as HTMLElement, "Claude++ Updates"),
     "Check Now",
   ));
-  hidden.setDialogStyle({ display: "block", visibility: "visible" });
-  hidden.flushAttributeMutation();
-
   automaticSecond.resolve(availableProductCheck());
   await flushPromises();
   assert.equal(hidden.countGroupActions("claudepp-update"), 1);

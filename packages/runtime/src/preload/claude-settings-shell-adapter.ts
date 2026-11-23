@@ -63,15 +63,31 @@ const navigationStateClasses = [...new Set([
   ...legacyActiveNavigationClasses,
   ...inactiveNavigationClasses,
 ])];
+const dialogSelector = '[role="dialog"][data-cds]';
+const settingsOverlay = "settings_modal";
+const nativeSettingsRowIds = ["general-settings", "claude-code-settings", "account-settings"];
+const settingsVisibilityAttributes = ["class", "style", "hidden", "aria-hidden", "open", "data-closed"];
+const portalObservation = { childList: true, attributes: true, attributeFilter: settingsVisibilityAttributes };
+
+type DialogScope = "hidden" | "candidate" | "settings";
+
+function dialogObservation(scope: DialogScope): MutationObserverInit {
+  if (scope === "candidate") return { childList: true };
+  const visible = scope === "settings";
+  return { ...portalObservation, childList: visible, subtree: visible };
+}
 
 export function createClaudeSettingsShellAdapter(
   environment: SettingsShellEnvironment,
 ): SettingsShellAdapter {
   let started = false;
   let observer: MutationObserver | null = null;
+  let legacyObserver: MutationObserver | null = null;
   let resizeObserver: ResizeObserver | null = null;
-  let resizeTarget: HTMLElement | null = null;
+  const portals = new Set<HTMLElement>();
+  const dialogs = new Map<HTMLElement, DialogScope>();
   let shell: SettingsShell | null = null;
+  let shellVisible = false;
   let groups: SettingsNavigationGroup[] = [];
   let groupElements: HTMLElement[] = [];
   let navigationKey: string | null = null;
@@ -81,32 +97,18 @@ export function createClaudeSettingsShellAdapter(
   let activeRender: ((root: HTMLElement) => void | (() => void)) | null = null;
   let activeTeardown: (() => void) | null = null;
   let panel: HTMLElement | null = null;
-  let documentClick: ((event: Event) => void) | null = null;
   let nativeSelection: { button: HTMLButtonElement; classes: string[]; ariaCurrent: string | null } | null = null;
   let notifyNavigationMount: (visible: boolean) => void = () => {};
   let notifyVisibility: ((visible: boolean) => void) | null = null;
   let lastVisible = false;
   const hiddenNativeChildren = new Map<HTMLElement, string>();
-  const onWindowResize = (): void => {
-    if (started) publishVisibility();
-  };
 
   function start(): void {
     if (started) return;
     started = true;
-    observer = new environment.MutationObserver(() => {
-      if (started) syncShell();
-    });
-    observer.observe(environment.document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["class", "style", "hidden", "aria-hidden", "open"],
-    });
-    environment.windowEvents.addEventListener("resize", onWindowResize);
-    documentClick = (event) => onDocumentClick(event);
-    environment.document.addEventListener("click", documentClick, true);
-    syncShell();
+    observer = new environment.MutationObserver(onSettingsMutations);
+    observer.observe(environment.document.body, { childList: true });
+    if (discoverDialogs(environment.document.body.children)) syncDialogs();
   }
 
   function stop(): void {
@@ -115,10 +117,13 @@ export function createClaudeSettingsShellAdapter(
     removeNavigationGroups();
     observer?.disconnect();
     observer = null;
-    bindResizeObserver(null);
-    environment.windowEvents.removeEventListener("resize", onWindowResize);
-    if (documentClick) environment.document.removeEventListener("click", documentClick, true);
-    documentClick = null;
+    legacyObserver?.disconnect();
+    legacyObserver = null;
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    portals.clear();
+    dialogs.clear();
+    setShellVisible(false);
     shell = null;
     groups = [];
     navigationKey = null;
@@ -134,10 +139,10 @@ export function createClaudeSettingsShellAdapter(
     groups = nextGroups;
     activateNavigation = activate;
     notifyNativeRestored = nativeRestored;
+    if (!shellVisible) return;
     if (activeId && !groups.some((group) => group.items.some((item) => item.id === activeId))) {
       restoreNative();
     }
-    syncShell();
     syncNavigation();
   }
 
@@ -147,20 +152,20 @@ export function createClaudeSettingsShellAdapter(
 
   function setVisibilityListener(listener: (visible: boolean) => void): void {
     notifyVisibility = listener;
-    lastVisible = isShellVisible(shell);
+    lastVisible = shellVisible;
     listener(lastVisible);
   }
 
   function setActive(id: string | null): void {
     activeId = id;
-    syncNavigationActiveState();
+    if (shellVisible) syncNavigationActiveState();
   }
 
   function showPanel(
     id: string,
     render: (root: HTMLElement) => void | (() => void),
   ): void {
-    syncShell();
+    if (!shellVisible) return;
     runActiveTeardown();
     activeId = id;
     activeRender = render;
@@ -179,16 +184,154 @@ export function createClaudeSettingsShellAdapter(
     if (wasActive) notifyNativeRestored();
   }
 
-  function syncShell(): void {
-    const found = findSettingsShell(environment.document);
+  function discoverDialogs(nodes: ArrayLike<Node>): boolean {
+    let found = false;
+    for (const node of Array.from(nodes)) {
+      if (node.nodeType !== 1 || !node.isConnected) continue;
+      const element = node as HTMLElement;
+      if (element.matches(dialogSelector)) {
+        const overlay = element.getAttribute("data-perf-overlay");
+        if ((overlay !== null && overlay !== settingsOverlay) || dialogs.has(element)) continue;
+        const scope = overlay === settingsOverlay ? "hidden" : "candidate";
+        dialogs.set(element, scope);
+        observer?.observe(element, dialogObservation(scope));
+        if (scope === "hidden") observeDialogSize(element);
+        found = true;
+      } else if (element.hasAttribute("data-base-ui-portal") || element.hasAttribute("data-cds-portal")) {
+        if (portals.has(element)) continue;
+        portals.add(element);
+        observer?.observe(element, portalObservation);
+        // Claude mounts the Base UI host, CDS wrapper, and dialog in separate commits.
+        if (discoverDialogs(element.children)) found = true;
+      }
+    }
+    return found;
+  }
+
+  function onSettingsMutations(records: MutationRecord[]): void {
+    let needsSync = false;
+    let removedHost = false;
+    for (const { target, type, addedNodes, removedNodes } of records) {
+      if (target === environment.document.body || portals.has(target as HTMLElement)) {
+        if (type === "childList") {
+          if (discoverDialogs(addedNodes)) needsSync = true;
+          removedHost ||= Array.from(removedNodes).some((node) =>
+            portals.has(node as HTMLElement) || dialogs.has(node as HTMLElement));
+        } else if ([...dialogs].some(([dialog, scope]) => scope !== "candidate" && target.contains(dialog))) {
+          needsSync = true;
+        }
+      } else {
+        needsSync = true;
+      }
+    }
+    if (removedHost) {
+      // MutationObserver has no way to detach a single target.
+      observer?.disconnect();
+      observer?.observe(environment.document.body, { childList: true });
+      for (const portal of portals) {
+        if (isInPortalScope(portal)) observer?.observe(portal, portalObservation);
+        else portals.delete(portal);
+      }
+      for (const [dialog, scope] of dialogs) {
+        if (isInPortalScope(dialog)) observer?.observe(dialog, dialogObservation(scope));
+        else {
+          resizeObserver?.unobserve(dialog);
+          dialogs.delete(dialog);
+          needsSync = true;
+        }
+      }
+      if (![...dialogs.values()].some((scope) => scope !== "candidate")) {
+        resizeObserver?.disconnect();
+        resizeObserver = null;
+      }
+    }
+    if (needsSync) syncDialogs();
+  }
+
+  function isInPortalScope(element: HTMLElement): boolean {
+    let parent = element.parentElement;
+    while (parent && portals.has(parent)) parent = parent.parentElement;
+    return parent === environment.document.body;
+  }
+
+  function syncDialogVisibility(): void {
+    for (const [dialog, scope] of dialogs) {
+      if (scope === "candidate") continue;
+      if (isDialogVisible(dialog) !== (scope !== "hidden")) {
+        syncDialogs();
+        return;
+      }
+    }
+  }
+
+  function syncDialogs(): void {
+    if (!started) return;
+    legacyObserver?.disconnect();
+    let found: SettingsShell | null = null;
+    for (const [dialog, existingScope] of dialogs) {
+      let candidate: SettingsShell | null = null;
+      if (existingScope === "candidate") {
+        candidate = findSettingsShell(dialog);
+        if (!candidate) {
+          observeLegacyNavigation(dialog);
+          continue;
+        }
+        observeDialogSize(dialog);
+      }
+      const visible = isDialogVisible(dialog);
+      const scope = visible ? "settings" : "hidden";
+      if (scope !== existingScope) {
+        dialogs.set(dialog, scope);
+        observer?.observe(dialog, dialogObservation(scope));
+      }
+      if (visible) found ??= candidate ?? findSettingsShell(dialog);
+    }
+    syncShell(found);
+  }
+
+  function observeDialogSize(dialog: HTMLElement): void {
+    resizeObserver ??= new environment.ResizeObserver(syncDialogVisibility);
+    resizeObserver.observe(dialog);
+  }
+
+  function observeLegacyNavigation(dialog: HTMLElement): void {
+    const observeChildren = (target: Element, subtree = false): void => {
+      legacyObserver ??= new environment.MutationObserver(syncDialogs);
+      legacyObserver.observe(target, { childList: true, subtree });
+    };
+    const hosts = [dialog, ...Array.from(dialog.children).filter(isContentsWrapper)];
+    for (const host of hosts) {
+      if (host !== dialog) observeChildren(host);
+      const nav = Array.from(host.children).find((child) => child.tagName === "NAV");
+      if (!nav) continue;
+      observeChildren(nav);
+      for (const rowId of nativeSettingsRowIds) {
+        const row = nav.querySelector(`[data-testid="${rowId}"]`);
+        if (row) observeChildren(row, true);
+      }
+      for (const section of Array.from(nav.children)) {
+        if (section.tagName !== "DIV") continue;
+        observeChildren(section);
+        for (const list of Array.from(section.children)) {
+          if (list.tagName === "UL") observeChildren(list);
+        }
+      }
+    }
+  }
+
+  function syncShell(found: SettingsShell | null): void {
     if (!found) {
-      if (shell) restoreNative();
-      shell = null;
-      removeNavigationGroups();
-      bindResizeObserver(null);
+      const wasVisible = shellVisible;
+      setShellVisible(false);
+      if (wasVisible) restoreNative();
+      if (shell && dialogs.get(shell.dialog) !== "hidden") {
+        shell = null;
+        removeNavigationGroups();
+      }
       publishVisibility();
       return;
     }
+    setShellVisible(true);
     if (
       shell?.dialog === found.dialog &&
       shell.nav === found.nav &&
@@ -212,7 +355,6 @@ export function createClaudeSettingsShellAdapter(
       nativeSelection = null;
     }
     shell = found;
-    bindResizeObserver(found.dialog);
     navigationKey = null;
     activeId = retainedId;
     activeRender = retainedRender;
@@ -265,7 +407,7 @@ export function createClaudeSettingsShellAdapter(
     navigationKey = desiredKey;
     syncNavigationActiveState();
     if (groupElements.length > 0 && !hadAttachedNavigation) {
-      notifyNavigationMount(isShellVisible(shell));
+      notifyNavigationMount(shellVisible);
     }
   }
 
@@ -458,35 +600,34 @@ export function createClaudeSettingsShellAdapter(
     navigationKey = null;
   }
 
-  function bindResizeObserver(dialog: HTMLElement | null): void {
-    if (resizeTarget === dialog) return;
-    resizeObserver?.disconnect();
-    resizeObserver = null;
-    resizeTarget = dialog;
-    if (!dialog) return;
-    resizeObserver = new environment.ResizeObserver(() => {
-      if (started) publishVisibility();
-    });
-    resizeObserver.observe(dialog);
+  function setShellVisible(visible: boolean): void {
+    if (shellVisible === visible) return;
+    shellVisible = visible;
+    if (visible) {
+      environment.windowEvents.addEventListener("resize", syncDialogVisibility);
+      environment.document.addEventListener("click", onDocumentClick, true);
+    } else {
+      environment.windowEvents.removeEventListener("resize", syncDialogVisibility);
+      environment.document.removeEventListener("click", onDocumentClick, true);
+    }
   }
 
-  function isShellVisible(candidate: SettingsShell | null): boolean {
-    if (!candidate?.dialog.isConnected) return false;
-    const style = environment.getComputedStyle(candidate.dialog);
+  function isDialogVisible(dialog: HTMLElement): boolean {
+    if (!dialog.isConnected || dialog.hasAttribute("data-closed")) return false;
+    const style = environment.getComputedStyle(dialog);
     if (style.display === "none" || style.visibility === "hidden") return false;
-    const rect = environment.getBoundingClientRect(candidate.dialog);
+    const rect = environment.getBoundingClientRect(dialog);
     return rect.width > 0 && rect.height > 0;
   }
 
   function publishVisibility(): void {
-    const visible = isShellVisible(shell);
-    if (visible === lastVisible) return;
-    lastVisible = visible;
-    notifyVisibility?.(visible);
+    if (shellVisible === lastVisible) return;
+    lastVisible = shellVisible;
+    notifyVisibility?.(shellVisible);
   }
 
   function onDocumentClick(event: Event): void {
-    if (!shell || !activeId) return;
+    if (!shellVisible || !shell || !activeId) return;
     const target = event.target as { closest?: (selector: string) => Element | null } | null;
     const control = target?.closest?.("button,a,[role='link']");
     if (!control || !shell.nav.contains(control as Node)) return;
@@ -506,36 +647,37 @@ export function createClaudeSettingsShellAdapter(
   };
 }
 
-function findSettingsShell(document: Document): SettingsShell | null {
-  const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"][data-cds]');
-  for (const dialog of Array.from(dialogs)) {
-    const directChildren = Array.from(dialog.children) as HTMLElement[];
-    // display: contents 保留 DOM 包装层，新版设置将导航和内容放在该层中。
-    const wrapper = directChildren.find((child) =>
-      child.tagName === "DIV" && child.className.split(/\s+/).includes("contents") &&
-      Array.from(child.children).some((nested) => nested.tagName === "NAV"));
-    const layoutChildren = wrapper ? Array.from(wrapper.children) as HTMLElement[] : directChildren;
-    const nav = layoutChildren.find((child) => child.tagName === "NAV");
-    // 新布局的内容面板在可选顶部栏之后；旧布局保持原来的查找顺序。
-    const contentCandidates = wrapper ? layoutChildren.slice().reverse() : layoutChildren;
-    const content = contentCandidates.find((child) => child !== nav && child.tagName === "DIV");
-    if (!nav || !content) continue;
-    const nativeButton = findNativeSettingsButton(nav);
-    if (!nativeButton) continue;
-    const nativeList = nativeButton.closest("ul");
-    const navHost = nativeList?.parentElement;
-    if (!navHost || navHost.tagName !== "DIV") continue;
-    return { dialog, nav, navHost, nativeButton, content };
-  }
-  return null;
+function findSettingsShell(dialog: HTMLElement): SettingsShell | null {
+  const directChildren = Array.from(dialog.children) as HTMLElement[];
+  // display: contents 保留 DOM 包装层，新版设置将导航和内容放在该层中。
+  const wrapper = directChildren.find((child) =>
+    isContentsWrapper(child) &&
+    Array.from(child.children).some((nested) => nested.tagName === "NAV"));
+  const layoutChildren = wrapper ? Array.from(wrapper.children) as HTMLElement[] : directChildren;
+  const nav = layoutChildren.find((child) => child.tagName === "NAV");
+  // 新布局的内容面板在可选顶部栏之后；旧布局保持原来的查找顺序。
+  const contentCandidates = wrapper ? layoutChildren.slice().reverse() : layoutChildren;
+  const content = contentCandidates.find((child) => child !== nav && child.tagName === "DIV");
+  if (!nav || !content) return null;
+  const nativeButton = findNativeSettingsButton(nav);
+  if (!nativeButton) return null;
+  const nativeList = nativeButton.closest("ul");
+  const navHost = nativeList?.parentElement;
+  if (!navHost || navHost.tagName !== "DIV") return null;
+  return { dialog, nav, navHost, nativeButton, content };
+}
+
+function isContentsWrapper(element: Element): boolean {
+  return element.tagName === "DIV" && element.className.split(/\s+/).includes("contents");
 }
 
 function findNativeSettingsButton(nav: HTMLElement): HTMLButtonElement | null {
   // Claude keeps the settings row IDs when it renames or translates their labels.
   const rowButton = (id: string) =>
     nav.querySelector(`[data-testid="${id}"]`)?.querySelector<HTMLButtonElement>("button");
-  if (rowButton("general-settings")) {
-    const anchor = rowButton("claude-code-settings") ?? rowButton("account-settings");
+  const [generalId, codeId, accountId] = nativeSettingsRowIds;
+  if (rowButton(generalId)) {
+    const anchor = rowButton(codeId) ?? rowButton(accountId);
     if (anchor) return anchor;
   }
   const buttons = Array.from(nav.querySelectorAll<HTMLButtonElement>("button"));
