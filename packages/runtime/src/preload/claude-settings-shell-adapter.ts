@@ -197,7 +197,12 @@ export function createClaudeSettingsShellAdapter(
         observer?.observe(element, dialogObservation(scope));
         if (scope === "hidden") observeDialogSize(element);
         found = true;
-      } else if (element.hasAttribute("data-base-ui-portal") || element.hasAttribute("data-cds-portal")) {
+      } else if (
+        element.hasAttribute("data-base-ui-portal") ||
+        element.hasAttribute("data-cds-portal") ||
+        // Claude Desktop mounts its Base UI portals inside this dedicated body child.
+        (element.parentElement === environment.document.body && element.getAttribute("id") === "portal-root")
+      ) {
         if (portals.has(element)) continue;
         portals.add(element);
         observer?.observe(element, portalObservation);

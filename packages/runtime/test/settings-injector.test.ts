@@ -175,6 +175,33 @@ test("native settings mounts after the portal and its navigation render in separ
   assert.equal(fixture.countPageButtons("claudepp:config"), 1);
 });
 
+test("mounts Claude++ navigation in the desktop portal root without observing chat", () => {
+  const fixture = settingsFixture({
+    mountOnStart: false,
+    layout: "contents-with-top-row",
+    nativeNavigation: "test-id",
+  });
+  const root = fixture.appendDesktopPortalRoot();
+  startSettingsInjector(fixture.environment);
+  const reads = fixture.settingsReadCounts();
+
+  fixture.appendChatUpdate();
+  assert.deepEqual(fixture.drainQueuedMutations(4), { turns: 0, pending: false });
+  assert.deepEqual(fixture.settingsReadCounts(), reads);
+
+  const portal = fixture.appendNativePortal(root);
+  fixture.flushMutation();
+  fixture.appendIncompleteSettingsDialog(portal);
+  fixture.mountSettingsContents();
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 1);
+
+  portal.remove();
+  fixture.flushMutation();
+  assert.equal(fixture.countPageButtons("claudepp:config"), 0);
+  assert.equal(fixture.activeResizeObserverCount(), 0);
+});
+
 test("a retained native settings dialog tears down its page and idles until reopened", () => {
   const fixture = settingsFixture({ mountOnStart: false });
   startSettingsInjector(fixture.environment);

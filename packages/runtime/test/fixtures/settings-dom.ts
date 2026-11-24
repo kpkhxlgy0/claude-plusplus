@@ -580,10 +580,16 @@ export function settingsFixture(options: SettingsFixtureOptions = {}) {
       turn.append(reply);
       reply.textContent = "Claude is typing";
     },
-    appendNativePortal(): MiniElement {
+    appendDesktopPortalRoot(): MiniElement {
+      const root = document.createElement("div");
+      root.setAttribute("id", "portal-root");
+      document.body.append(root);
+      return root;
+    },
+    appendNativePortal(parent = document.body): MiniElement {
       const portal = document.createElement("div");
       portal.setAttribute("data-base-ui-portal", "");
-      document.body.append(portal);
+      parent.append(portal);
       return portal;
     },
     appendIncompleteSettingsDialog(portal: MiniElement, marked = true): void {
